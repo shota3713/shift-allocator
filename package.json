@@ -1,0 +1,23 @@
+{
+  "name": "shift-allocator",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "勤務表PDFを決定論的に読み取り、業務を公平に割り振る静的ウェブアプリ",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.8.69"
+  }
+}

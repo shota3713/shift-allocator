@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.DS_Store
+
+# 実データ。氏名・原本PDF・解析メモが入るので絶対に公開しない。
+local/
+
+# 旧版（GAS / 静的サイト）。ドキュメントに実名が残っているため公開しない。
+_archive/
+
+# docs/ は GitHub Pages の公開物なので、ビルド結果をコミットする。
