@@ -122,3 +122,22 @@ describe('PDF全体の読み取り', () => {
     expect(last.cells.filter((c) => c.code !== null).length).toBe(30);
   });
 });
+
+describe('勤務表ではないPDF', () => {
+  it('行も日付も取れないことを警告として返す', () => {
+    const blank = parseShiftTable([{ width: 200, height: 200, items: [] }]);
+    expect(blank.rows).toEqual([]);
+    expect(blank.days).toEqual([]);
+    expect(blank.warnings.length).toBeGreaterThan(0);
+  });
+
+  it('日付ヘッダが無ければ読み取らない', () => {
+    const noHeader = parseShiftTable([{
+      width: 200,
+      height: 200,
+      items: [{ x: 10, y: 100, w: 40, h: 10, str: 'ただのPDFです' }],
+    }]);
+    expect(noHeader.rows).toEqual([]);
+    expect(noHeader.warnings.length).toBeGreaterThan(0);
+  });
+})

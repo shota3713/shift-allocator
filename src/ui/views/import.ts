@@ -139,6 +139,27 @@ function renderResult(
       )),
   );
 
+  // 勤務表として成立していないPDFを「読み取れました」と言ってはいけない。
+  // 別のPDFを選んだことに気づけないまま進んでしまう。
+  const looksLikeShiftTable = parsed.rows.length > 0 && parsed.days.length > 0;
+
+  if (!looksLikeShiftTable) {
+    root.append(
+      el('div', { class: 'notice notice--blocked', style: 'margin-top:var(--step-4)' },
+        el('strong', { text: 'このPDFは勤務表として読み取れませんでした。' }),
+        el('span', { text: '勤務（予定）表のPDFか確認してください。スキャンした画像のPDFは読めません。' }),
+        ...parsed.warnings.map((w) => el('span', { text: w }))),
+      el('div', { class: 'actions' },
+        el('button', {
+          class: 'btn btn--quiet',
+          type: 'button',
+          text: '別のPDFを選ぶ',
+          onclick: () => renderImport(root, ctx),
+        })),
+    );
+    return;
+  }
+
   if (parsed.unread.length === 0) {
     root.append(
       el('div', { class: 'notice notice--settled', style: 'margin-top:var(--step-4)' },
