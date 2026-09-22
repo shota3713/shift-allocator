@@ -85,7 +85,10 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
       note: '空いている人が優先。いなければ連絡帳・レク以外の人が兼任します',
     }),
     row('REHA_PM', 'PMリハ', SLOT.PM, 3, 1, care),
-    row('HANDWORK', '手作業', SLOT.PM, 2, 2, care),
+    row('HANDWORK', '手作業', SLOT.PM, 2, 2, care, {
+      minHeadcount: 1,
+      note: '午後に人が少ない日は1人に減らします',
+    }),
   ];
 }
 

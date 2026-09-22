@@ -60,7 +60,7 @@ export function databaseWith(options: {
   /** 既定の日勤ではない勤務区分を staffId ごとに指定する。 */
   codes?: Readonly<Record<string, Readonly<Record<number, string>>>>;
   /** 誰が何を担当できるか。省略すると職種から判断する。 */
-  skills?: readonly { staffId: string; taskIds: readonly string[] }[];
+  skills?: readonly { staffId: string; taskIds: readonly string[]; excluded?: readonly string[] }[];
 }): Database {
   const confirmed: ConfirmedShift[] = [];
   for (const person of options.staff) {
@@ -80,7 +80,11 @@ export function databaseWith(options: {
     staff: [...options.staff],
     tasks: [...options.tasks],
     shiftTypes: [WORK, OFF, AM_ONLY, FREE],
-    skills: options.skills ? [...options.skills] : [],
+    skills: (options.skills ?? []).map((s) => ({
+      staffId: s.staffId,
+      taskIds: [...s.taskIds],
+      excluded: [...(s.excluded ?? options.tasks.map((t) => t.taskId).filter((id) => !s.taskIds.includes(id)))],
+    })),
     confirmed,
   };
 }

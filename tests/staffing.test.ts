@@ -118,6 +118,8 @@ describe('手作業', () => {
     const handwork = defaultTasks(CARE_JOBS).find((t) => t.taskId === 'HANDWORK');
     expect(handwork?.slot).toBe(SLOT.PM);
     expect(handwork?.headcount).toBe(2);
+    // 午後が薄い日は1人に落ちる。空欄で残すより1人でも立てる。
+    expect(handwork?.minHeadcount).toBe(1);
   });
 
   it('PMリハの人は手作業に入らない', () => {

@@ -135,7 +135,7 @@ function openTaskMembers(task: Task, ctx: Ctx): void {
           onclick: () => {
             ctx.update((db) => ({
               ...db,
-              skills: setTaskMembers(db.skills, db.staff, db.tasks, task.taskId, [...chosen]),
+              skills: setTaskMembers(db.skills, db.staff, task.taskId, [...chosen]),
             }));
             close();
             toast(`${task.name} は ${chosen.size}人が担当できます。`);
@@ -198,7 +198,12 @@ function openStaffTasks(person: Staff, ctx: Ctx): void {
           onclick: () => {
             ctx.update((current) => ({
               ...current,
-              skills: setSkills(current.skills, person.staffId, [...chosen]),
+              skills: setSkills(
+                current.skills,
+                person.staffId,
+                [...chosen],
+                current.tasks.map((t) => t.taskId),
+              ),
             }));
             close();
             toast(`${person.name} は ${chosen.size}件を担当できます。`);

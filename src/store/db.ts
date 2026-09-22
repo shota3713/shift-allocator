@@ -12,7 +12,7 @@
 import { DEFAULT_DIFFICULTY, difficultyFromWeight, isDifficultyLevel } from '../core/difficulty';
 import { defaultTasks } from '../core/masters';
 import { PRESENCE, readShiftCode } from '../core/shiftCode';
-import type { StaffSkills } from '../core/skills';
+import { migrateSkills, type StaffSkills } from '../core/skills';
 import type { LearnedRule, ShiftType, Staff, Task } from '../core/types';
 
 const STORAGE_KEY = 'shift-allocator:v2';
@@ -193,13 +193,14 @@ function normalize(raw: unknown): Database {
   if (typeof raw !== 'object' || raw === null) return base;
   const value = raw as Partial<Database>;
   const list = <T,>(v: unknown): readonly T[] => (Array.isArray(v) ? (v as T[]) : []);
+  const tasks = list<Task>(value.tasks).map(normalizeTask);
   return {
     version: 2,
     staff: list<Staff>(value.staff),
     aliases: list<Alias>(value.aliases),
-    tasks: list<Task>(value.tasks).map(normalizeTask),
+    tasks,
     shiftTypes: list<ShiftType>(value.shiftTypes).map(normalizeShiftType),
-    skills: list<StaffSkills>(value.skills),
+    skills: migrateSkills(list<StaffSkills>(value.skills), tasks),
     confirmed: list<ConfirmedShift>(value.confirmed),
     runs: list<Run>(value.runs).map(normalizeRun),
     corrections: list<Correction>(value.corrections),

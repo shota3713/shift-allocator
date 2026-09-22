@@ -128,7 +128,7 @@ describe('マスタを作ったあとの取り込み', () => {
     const configured: Database = {
       ...db,
       tasks,
-      skills: [{ staffId: someone.staffId, taskIds: ['BATH'] }],
+      skills: [{ staffId: someone.staffId, taskIds: ['BATH'], excluded: ['REC_LEAD'] }],
     };
 
     const again = acceptAll(commitImport(configured, buildImportReview(parsed, configured)));
