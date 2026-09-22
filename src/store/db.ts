@@ -161,11 +161,14 @@ function normalizeTask(task: Task): Task {
     minHeadcount: typeof task.minHeadcount === 'number'
       ? Math.min(headcount, Math.max(1, task.minHeadcount))
       : Math.min(headcount, builtIn?.minHeadcount ?? headcount),
-    allowSameSlot: typeof task.allowSameSlot === 'boolean'
-      ? task.allowSameSlot
-      : builtIn?.allowSameSlot ?? false,
-    avoidWith: Array.isArray(task.avoidWith) ? task.avoidWith : builtIn?.avoidWith ?? [],
-    preferOrder: Array.isArray(task.preferOrder) ? task.preferOrder : builtIn?.preferOrder ?? [],
+    // 掛け持ちの可否・優先順・説明文は画面から触れないので、組み込みの決まりを
+    // 正とする。ここを保存データ任せにすると、決まりを直しても古い設定が残る。
+    allowSameSlot: builtIn ? builtIn.allowSameSlot : task.allowSameSlot === true,
+    avoidWith: builtIn ? builtIn.avoidWith : Array.isArray(task.avoidWith) ? task.avoidWith : [],
+    preferOrder: builtIn
+      ? builtIn.preferOrder
+      : Array.isArray(task.preferOrder) ? task.preferOrder : [],
+    note: builtIn ? builtIn.note : task.note ?? '',
     eligibleJob: Array.isArray(task.eligibleJob) ? task.eligibleJob : [],
   };
 }

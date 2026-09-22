@@ -21,6 +21,11 @@ export const AM_ONLY: ShiftType = {
   code: '日/F', label: '日/F', isWorking: true, hours: 4, aliases: [],
   am: PRESENCE.WORK, pm: PRESENCE.FREE,
 };
+/** 早番。昼担当の優先対象。 */
+export const EARLY: ShiftType = {
+  code: '早', label: '早', isWorking: true, hours: 8, aliases: [],
+  am: PRESENCE.WORK, pm: PRESENCE.WORK,
+};
 /** 1日フリー。出勤の行に並ぶが業務は載らない。 */
 export const FREE: ShiftType = {
   code: 'F', label: 'F', isWorking: true, hours: 8, aliases: [],
@@ -79,7 +84,7 @@ export function databaseWith(options: {
     ...emptyDatabase(),
     staff: [...options.staff],
     tasks: [...options.tasks],
-    shiftTypes: [WORK, OFF, AM_ONLY, FREE],
+    shiftTypes: [WORK, OFF, AM_ONLY, FREE, EARLY],
     skills: (options.skills ?? []).map((s) => ({
       staffId: s.staffId,
       taskIds: [...s.taskIds],

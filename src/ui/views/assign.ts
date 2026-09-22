@@ -147,10 +147,50 @@ function execute(ctx: Ctx, plan: Plan): void {
 
 /* ── 実行後 ────────────────────────────────── */
 
+/**
+ * 結果は実行したときの写し。あとから業務を足しても、この結果には入らない。
+ * 黙っていると「足したのに割り振られない」と見えるので、ずれを名指しで出す。
+ */
+function staleTasks(plan: Plan, run: Run): { missing: string[]; extra: string[] } {
+  const key = (a: { day: number; taskId: string; index: number }): string =>
+    `${a.day}#${a.taskId}#${a.index}`;
+  const planned = new Set(plan.slots.map(key));
+  const inRun = new Set(run.assignments.map(key));
+  const nameOf = (id: string): string => plan.tasksById.get(id)?.name ?? id;
+
+  const missing = [...new Set(plan.slots.filter((s) => !inRun.has(key(s))).map((s) => s.taskId))];
+  const extra = [...new Set(
+    run.assignments.filter((a) => !planned.has(key(a))).map((a) => a.taskId),
+  )];
+  return { missing: missing.map(nameOf), extra: extra.map(nameOf) };
+}
+
 function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: readonly Run[]): void {
   const assignments: Assignment[] = toAssignments(run, plan);
   const stats = buildStats(assignments, plan);
   const manual = run.assignments.filter((a) => a.origin === 'manual').length;
+  const stale = staleTasks(plan, run);
+
+  if (stale.missing.length > 0 || stale.extra.length > 0) {
+    root.append(
+      el('div', { class: 'notice notice--caution' },
+        el('strong', { text: 'この結果は、いまの業務の設定と合っていません。' }),
+        stale.missing.length > 0
+          ? el('span', { text: `${stale.missing.join('・')} の枠がこの結果に入っていません。` })
+          : null,
+        stale.extra.length > 0
+          ? el('span', { text: `${stale.extra.join('・')} は、いまは割り振らない設定です。` })
+          : null,
+        el('span', { text: '割り振り直すと反映されます。手修正はやり直しになります。' })),
+      el('div', { class: 'actions', style: 'margin-bottom:var(--step-4)' },
+        el('button', {
+          class: 'btn btn--primary',
+          type: 'button',
+          text: 'いまの設定で割り振り直す',
+          onclick: () => execute(ctx, plan),
+        })),
+    );
+  }
 
   root.append(
     el('div', { class: 'tally' },

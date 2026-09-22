@@ -67,10 +67,10 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     row('NURSE_AM', '看護師', SLOT.AM, 2, 1, [nurse]),
     row('BATH', '入浴担当', SLOT.AM, 3, 2, care),
     row('BATH_LEAD', '入浴リーダー', SLOT.AM, 4, 1, care, { exclusiveGroup: lead }),
-    // 昼は看護師と午前だけの人が基本。いなければ遅番が入る。
+    // 昼は看護師と早番が優先。上の順の人が出払ってから下へ降りる。
     row('NOON', '昼担当', SLOT.NOON, 2, 3, careAndNurse, {
-      preferOrder: [`job:${nurse}`, 'amOnly', 'kind:LATE'],
-      note: '看護師 → 午前だけの人 → 遅番 の順で当てます',
+      preferOrder: [`job:${nurse}`, 'kind:EARLY', 'amOnly', 'kind:LATE'],
+      note: '看護師 → 早番 → 午前だけの人 → 遅番 の順で当てます',
     }),
     row('RENRAKU', '連絡帳', SLOT.PM, 3, 1, careAndNurse, {
       exclusiveGroup: lead,
