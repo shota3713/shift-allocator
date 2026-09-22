@@ -17,6 +17,8 @@ import {
   candidatesForSlot,
   recordCorrection,
   type LearningProposal,
+  type SlotCandidate,
+  type SlotKey,
 } from '../../core/learn';
 import { defaultTasks } from '../../core/masters';
 import { newId, nowIso, type Run } from '../../store/db';
@@ -120,6 +122,7 @@ function execute(ctx: Ctx, plan: Plan): void {
     weightFairnessTotal: settings.weightFairnessTotal,
     weightFairnessTask: settings.weightFairnessTask,
     weightLearnedRule: settings.weightLearnedRule,
+    weightPreference: settings.weightPreference,
     improvementPasses: settings.improvementPasses,
   }, settings.seed);
 
@@ -132,6 +135,7 @@ function execute(ctx: Ctx, plan: Plan): void {
     assignments: result.assignments.map((a) => ({
       day: a.day,
       taskId: a.taskId,
+      index: a.index,
       staffId: a.staffId,
       origin: 'auto' as const,
     })),
@@ -144,12 +148,7 @@ function execute(ctx: Ctx, plan: Plan): void {
 /* ── 実行後 ────────────────────────────────── */
 
 function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: readonly Run[]): void {
-  const assignments: Assignment[] = run.assignments.map((a) => ({
-    day: a.day,
-    taskId: a.taskId,
-    staffId: a.staffId,
-    weekday: weekdayOf(plan.year, plan.month, a.day),
-  }));
+  const assignments: Assignment[] = toAssignments(run, plan);
   const stats = buildStats(assignments, plan);
   const manual = run.assignments.filter((a) => a.origin === 'manual').length;
 
@@ -206,23 +205,38 @@ function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: r
   );
 }
 
+function toAssignments(run: Run, plan: Plan): Assignment[] {
+  return run.assignments.map((a) => ({
+    day: a.day,
+    taskId: a.taskId,
+    index: a.index,
+    staffId: a.staffId,
+    weekday: weekdayOf(plan.year, plan.month, a.day),
+  }));
+}
+
 function renderDay(ctx: Ctx, plan: Plan, run: Run, day: number): HTMLElement {
   const weekday = WEEKDAY_LABELS[weekdayOf(plan.year, plan.month, day)];
   const rows = SLOT_ORDER.flatMap((slot) =>
     run.assignments
       .filter((a) => plan.tasksById.get(a.taskId)?.slot === slot)
       .filter((a) => a.day === day)
+      .sort((a, b) => a.index - b.index)
       .map((a) => {
         const task = plan.tasksById.get(a.taskId);
         const name = a.staffId ? plan.staffNames.get(a.staffId) ?? a.staffId : '';
+        // 同じ業務が複数人なら「1人目 / 2人目」を出す。
+        // どの枠を触っているのか分からないと、直したつもりが別の枠になる。
+        const seat = (task?.headcount ?? 1) > 1 ? `${a.index + 1}人目` : '';
         return el('button', {
           class: a.staffId ? 'row' : 'row row--blocked',
           type: 'button',
           style: 'text-align:left;cursor:pointer',
-          onclick: () => openCorrection(ctx, plan, run, day, a.taskId),
+          onclick: () => openCorrection(ctx, plan, run, { day, taskId: a.taskId, index: a.index }),
         },
           el('div', { class: 'row__main' },
-            el('span', { class: 'row__title', text: task?.name ?? a.taskId }),
+            el('span', { class: 'row__title',
+              text: seat ? `${task?.name ?? a.taskId}（${seat}）` : task?.name ?? a.taskId }),
             el('span', { class: 'row__note', text: name || '担当できる人がいません' })),
           el('span', {
             class: a.origin === 'manual' ? 'pill pill--caution' : `pill`,
@@ -240,33 +254,74 @@ function renderDay(ctx: Ctx, plan: Plan, run: Run, day: number): HTMLElement {
 
 /* ── 手修正と学習 ──────────────────────────── */
 
-function openCorrection(ctx: Ctx, plan: Plan, run: Run, day: number, taskId: string): void {
-  const current = run.assignments.find((a) => a.day === day && a.taskId === taskId);
-  const task = plan.tasksById.get(taskId);
-  const assignments: Assignment[] = run.assignments.map((a) => ({
-    day: a.day,
-    taskId: a.taskId,
-    staffId: a.staffId,
-    weekday: weekdayOf(plan.year, plan.month, a.day),
-  }));
-  const candidates = candidatesForSlot(assignments, plan, day, taskId);
+const GROUP_LABELS: Record<SlotCandidate['group'], string> = {
+  ready: 'そのまま入れられる人',
+  limited: '入れると無理が出る人',
+  absent: 'この時間帯は現場にいない人',
+};
+
+function optionsFor(candidates: readonly SlotCandidate[], current: string): HTMLElement[] {
+  const groups: SlotCandidate['group'][] = ['ready', 'limited', 'absent'];
+  return groups.flatMap((group) => {
+    const members = candidates.filter((c) => c.group === group);
+    if (members.length === 0) return [];
+    return [el('optgroup', { label: `${GROUP_LABELS[group]}（${members.length}人）` },
+      ...members.map((c) =>
+        el('option', {
+          value: c.staffId,
+          text: `${c.name}　${c.note}`,
+          selected: c.staffId === current,
+        })))];
+  });
+}
+
+/**
+ * 枠1つの担当を差し替える。
+ *
+ * 選択肢は制約を満たす人だけに絞らない。絞ると「この人にしたい」ができず、
+ * 結局アプリの外で直すことになる。入れられない人も理由付きで出して、
+ * 決めるのは人に任せる。
+ */
+function openCorrection(ctx: Ctx, plan: Plan, run: Run, key: SlotKey): void {
+  const current = run.assignments.find(
+    (a) => a.day === key.day && a.taskId === key.taskId && a.index === key.index,
+  );
+  const task = plan.tasksById.get(key.taskId);
+  const assignments = toAssignments(run, plan);
+  const candidates = candidatesForSlot(assignments, plan, key);
+  const readyCount = candidates.filter((c) => c.ok).length;
+
+  // 同じ日の同じ業務で、他の枠に入っている人。取り違えを防ぐために見せる。
+  const siblings = run.assignments
+    .filter((a) => a.day === key.day && a.taskId === key.taskId && a.index !== key.index && a.staffId)
+    .sort((a, b) => a.index - b.index)
+    .map((a) => `${a.index + 1}人目 ${plan.staffNames.get(a.staffId) ?? a.staffId}`);
 
   const select = el('select', { 'aria-label': '担当' },
-    el('option', { value: '', text: '空きにする' }),
-    ...candidates.map((c) =>
-      el('option', { value: c.staffId, text: c.name, selected: c.staffId === current?.staffId })));
+    el('option', { value: '', text: '空きにする', selected: !current?.staffId }),
+    ...optionsFor(candidates, current?.staffId ?? ''));
 
   const reason = el('textarea', {
     placeholder: '例）腰を痛めているので当面は外したい',
     'aria-label': '変更の理由',
   });
 
+  const seat = (task?.headcount ?? 1) > 1 ? `（${key.index + 1}人目）` : '';
+
   const close = openSheet({
-    title: `${day}日 ${task?.name ?? taskId}`,
+    title: `${key.day}日 ${task?.name ?? key.taskId}${seat}`,
     lead: candidates.length === 0
-      ? 'この枠を担当できる出勤者がいません。'
-      : '担当を入れ替えます。ハード制約を満たす人だけを出しています。',
+      ? 'この日に出勤している人がいません。'
+      : `この枠だけを入れ替えます。そのまま入れられる人は ${readyCount}人です。`,
     body: el('div', {},
+      task && task.preferOrder.length > 0
+        ? el('p', { class: 'field__hint', style: 'margin-bottom:var(--step-3)',
+            text: task.note || '' })
+        : null,
+      siblings.length > 0
+        ? el('p', { class: 'field__hint', style: 'margin-bottom:var(--step-3)',
+            text: `同じ日の他の枠: ${siblings.join(' / ')}` })
+        : null,
       el('div', { class: 'field' },
         el('label', { class: 'field__label', text: '担当' }), select),
       el('div', { class: 'field' },
@@ -277,7 +332,7 @@ function openCorrection(ctx: Ctx, plan: Plan, run: Run, day: number, taskId: str
         el('button', {
           class: 'btn btn--primary',
           type: 'button',
-          text: '変更する',
+          text: 'この枠を変更する',
           onclick: () => {
             const before = current?.staffId ?? '';
             const after = select.value;
@@ -288,14 +343,15 @@ function openCorrection(ctx: Ctx, plan: Plan, run: Run, day: number, taskId: str
             ctx.update((db) => recordCorrection(db, {
               runId: run.runId,
               period: plan.periodKey,
-              day,
-              taskId,
+              day: key.day,
+              taskId: key.taskId,
+              index: key.index,
               staffBefore: before,
               staffAfter: after,
               reason: reason.value.trim(),
             }).db);
             close();
-            offerLearning(ctx, plan, day, taskId, before, after);
+            offerLearning(ctx, plan, key.day, key.taskId, before, after);
           },
         }),
         el('button', { class: 'btn btn--quiet', type: 'button', text: 'やめる', onclick: () => close() }))),

@@ -339,6 +339,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .row--blocked { border-color: var(--blocked); background: var(--blocked-wash); }
 .row--caution { border-left: 3px solid var(--caution); }
+/* 現場に出る勤務区分。休み・フリーと見分けるための細い印。 */
+.row--active { border-left: 3px solid var(--settled); }
 .row__main { display: grid; gap: 2px; min-width: 0; }
 .row__title { font-weight: 700; }
 .row__note { font-size: var(--text-small); color: var(--ink-soft); }

@@ -31,19 +31,23 @@ const basePlan = () => planFor({ period: '2026-09', staff: CARE_TEAM, tasks: TAS
 describe('担当可否', () => {
   it('職種が合わなければ担当できない', () => {
     const plan = basePlan();
-    expect(isEligible('d', plan.tasksById.get('BATH'), plan.staffJob)).toBe(false);
-    expect(isEligible('a', plan.tasksById.get('BATH'), plan.staffJob)).toBe(true);
+    expect(isEligible('d', plan.tasksById.get('BATH'), plan)).toBe(false);
+    expect(isEligible('a', plan.tasksById.get('BATH'), plan)).toBe(true);
   });
 
-  it('指名があるときは指名された人だけ', () => {
+  it('個人の設定があるときは職種より優先される', () => {
     const plan = planFor({
       period: '2026-09',
       staff: CARE_TEAM,
-      tasks: [task({ taskId: 'RENRAKU', name: '連絡帳', eligibleStaff: ['b'] })],
+      tasks: [task({ taskId: 'RENRAKU', name: '連絡帳' })],
       days: DAYS,
+      skills: [
+        { staffId: 'a', taskIds: [] },
+        { staffId: 'b', taskIds: ['RENRAKU'] },
+      ],
     });
-    expect(isEligible('b', plan.tasksById.get('RENRAKU'), plan.staffJob)).toBe(true);
-    expect(isEligible('a', plan.tasksById.get('RENRAKU'), plan.staffJob)).toBe(false);
+    expect(isEligible('b', plan.tasksById.get('RENRAKU'), plan)).toBe(true);
+    expect(isEligible('a', plan.tasksById.get('RENRAKU'), plan)).toBe(false);
   });
 
   it('出勤していない日には割り当てられない', () => {
@@ -103,7 +107,7 @@ describe('振り分けの結果', () => {
 
   it('職種の合わない人を入れない', () => {
     for (const a of result.assignments) {
-      expect(isEligible(a.staffId, plan.tasksById.get(a.taskId), plan.staffJob)).toBe(true);
+      expect(isEligible(a.staffId, plan.tasksById.get(a.taskId), plan)).toBe(true);
     }
   });
 

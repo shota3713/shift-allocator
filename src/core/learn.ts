@@ -8,8 +8,9 @@
  * 目で区別できる。
  */
 
-import { canAssign, isEligible } from './assign';
+import { canAssign, isEligible, isPresent, preferenceTier } from './assign';
 import { weekdayOf } from './plan';
+import { SHIFT_KIND_LABELS } from './shiftCode';
 import { RULE_TYPE, WEEKDAY_LABELS, type Assignment, type LearnedRule, type Plan, type RuleType } from './types';
 import type { Correction, Database } from '../store/db';
 import { newId, nowIso } from '../store/db';
@@ -29,25 +30,101 @@ export interface LearningProposal {
   readonly evidence: number;
 }
 
+/** 修正画面に出す1人ぶんの選択肢。 */
+export interface SlotCandidate {
+  readonly staffId: string;
+  readonly name: string;
+  readonly job: string;
+  /** そのまま入れても制約を破らないか。 */
+  readonly ok: boolean;
+  /** 優先の理由、または入れられない理由。 */
+  readonly note: string;
+  readonly group: 'ready' | 'limited' | 'absent';
+}
+
+/** 枠を特定する鍵。同じ業務に複数人いるので index が要る。 */
+export interface SlotKey {
+  readonly day: number;
+  readonly taskId: string;
+  readonly index: number;
+}
+
+function indexOfSlot(assignments: readonly Assignment[], key: SlotKey): number {
+  return assignments.findIndex(
+    (a) => a.day === key.day && a.taskId === key.taskId && a.index === key.index,
+  );
+}
+
 /**
- * ある枠を交代できる人を返す。修正画面の選択肢になる。
- * 出勤・職種・指名・同時間帯の掛け持ち・排他グループをすべて考慮する。
+ * その枠に入れられる人を返す。修正画面の選択肢になる。
+ *
+ * 制約を満たす人だけに絞ると、画面に2〜3人しか出ず「この人にしたい」ができない。
+ * その日出勤している人は全員出して、入れられない人には理由を付ける。
+ * 決めるのは人で、機械は判断の材料を出すだけ。
  */
 export function candidatesForSlot(
   assignments: readonly Assignment[],
   plan: Plan,
-  day: number,
-  taskId: string,
-): { staffId: string; name: string }[] {
-  const index = assignments.findIndex((a) => a.day === day && a.taskId === taskId);
-  const task = plan.tasksById.get(taskId);
+  key: SlotKey,
+): SlotCandidate[] {
+  const task = plan.tasksById.get(key.taskId);
   if (!task) return [];
+  const here = indexOfSlot(assignments, key);
 
-  return (plan.workingByDay.get(day) ?? [])
-    .filter((staffId) => isEligible(staffId, task, plan.staffJob))
-    .filter((staffId) => canAssign(staffId, { day, taskId }, assignments, plan, index))
-    .map((staffId) => ({ staffId, name: plan.staffNames.get(staffId) ?? staffId }))
-    .sort((a, b) => (a.name < b.name ? -1 : 1));
+  const rows = (plan.workingByDay.get(key.day) ?? []).map((staffId): SlotCandidate => {
+    const name = plan.staffNames.get(staffId) ?? staffId;
+    const job = plan.staffJob.get(staffId) ?? '';
+    const present = isPresent(staffId, key.day, task.slot, plan);
+    const capable = isEligible(staffId, task, plan);
+
+    if (!present) {
+      const shift = plan.presence.get(staffId)?.get(key.day);
+      const why = shift
+        ? shift.am ? '午後はフリーです' : shift.pm ? '午前はフリーです' : 'この時間帯はいません'
+        : 'この時間帯はいません';
+      return { staffId, name, job, ok: false, note: why, group: 'absent' };
+    }
+    if (!capable) {
+      return {
+        staffId, name, job, ok: false,
+        note: 'この業務を担当できる人に入っていません',
+        group: 'limited',
+      };
+    }
+    if (!canAssign(staffId, key, assignments, plan, here)) {
+      const clash = assignments.find((a, i) =>
+        i !== here && a.staffId === staffId && a.day === key.day
+        && (plan.tasksById.get(a.taskId)?.slot === task.slot
+          || (task.exclusiveGroup !== ''
+            && plan.tasksById.get(a.taskId)?.exclusiveGroup === task.exclusiveGroup)));
+      const clashName = clash ? plan.tasksById.get(clash.taskId)?.name ?? clash.taskId : '';
+      return {
+        staffId, name, job, ok: false,
+        note: clashName ? `同じ日に「${clashName}」を持っています` : '掛け持ちになります',
+        group: 'limited',
+      };
+    }
+
+    const tier = preferenceTier(staffId, task, key.day, plan);
+    const shift = plan.presence.get(staffId)?.get(key.day);
+    const note = task.preferOrder.length === 0
+      ? job
+      : tier < task.preferOrder.length
+        ? `${job}／${shift?.amOnly === true ? '午前だけ' : SHIFT_KIND_LABELS[shift?.kind ?? 'DAY']}・優先`
+        : `${job}／${shift?.amOnly === true ? '午前だけ' : SHIFT_KIND_LABELS[shift?.kind ?? 'DAY']}`;
+    return { staffId, name, job, ok: true, note, group: 'ready' };
+  });
+
+  const rank = (c: SlotCandidate): number => (c.group === 'ready' ? 0 : c.group === 'limited' ? 1 : 2);
+  return rows.sort((a, b) => {
+    if (rank(a) !== rank(b)) return rank(a) - rank(b);
+    if (a.group === 'ready') {
+      const ta = preferenceTier(a.staffId, task, key.day, plan);
+      const tb = preferenceTier(b.staffId, task, key.day, plan);
+      if (ta !== tb) return ta - tb;
+    }
+    return a.name < b.name ? -1 : 1;
+  });
 }
 
 /**
@@ -116,6 +193,8 @@ export function recordCorrection(
     readonly period: string;
     readonly day: number;
     readonly taskId: string;
+    /** 同じ業務の何人目の枠か。ここを持たないと同じ業務の枠が全部書き換わる。 */
+    readonly index: number;
     readonly staffBefore: string;
     readonly staffAfter: string;
     readonly reason?: string;
@@ -127,6 +206,7 @@ export function recordCorrection(
     period: input.period,
     day: input.day,
     taskId: input.taskId,
+    index: input.index,
     staffBefore: input.staffBefore,
     staffAfter: input.staffAfter,
     reason: input.reason ?? '',
@@ -138,8 +218,10 @@ export function recordCorrection(
     if (run.runId !== input.runId) return run;
     return {
       ...run,
+      // 枠は (日 / 業務 / 何人目) で一意。index を見ないと、昼担当のように
+      // 同じ業務が同じ日に複数ある枠が、まとめて同じ人に書き換わる。
       assignments: run.assignments.map((a) =>
-        a.day === input.day && a.taskId === input.taskId
+        a.day === input.day && a.taskId === input.taskId && a.index === input.index
           ? { ...a, staffId: input.staffAfter, origin: 'manual' as const }
           : a,
       ),

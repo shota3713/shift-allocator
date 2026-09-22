@@ -80,6 +80,8 @@ function acceptAll(db: Database): Database {
     isWorking: c.isWorking,
     hours: c.isWorking ? 8 : 0,
     aliases: [],
+    am: c.am,
+    pm: c.pm,
   }));
   return upsertShiftTypes(addStaff(db, additions), types);
 }
@@ -117,6 +119,24 @@ describe('マスタを作ったあとの取り込み', () => {
     // 30日のうち、誰も出勤しない日（休業日）は枠が立たない。
     expect(plan.workingByDay.size).toBe(26);
     expect(plan.slots.length).toBeGreaterThan(0);
+  });
+
+  it('担当できる人の設定は、取り込み直しても残る', () => {
+    // 名簿を毎月作り直さず、取り込みで起こしているので、設定が消えないことが要。
+    const tasks = defaultTasks(db.settings.careJobs);
+    const someone = db.staff[0]!;
+    const configured: Database = {
+      ...db,
+      tasks,
+      skills: [{ staffId: someone.staffId, taskIds: ['BATH'] }],
+    };
+
+    const again = acceptAll(commitImport(configured, buildImportReview(parsed, configured)));
+    expect(again.skills).toEqual(configured.skills);
+
+    const plan = buildPlan(again, '2026-09');
+    expect(plan.capable.get('BATH')?.has(someone.staffId)).toBe(true);
+    expect(plan.capable.get('REC_LEAD')?.has(someone.staffId)).toBe(false);
   });
 
   it('休みの日は出勤扱いにしない', () => {

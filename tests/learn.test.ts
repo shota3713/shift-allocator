@@ -41,6 +41,7 @@ function seeded(): { db: Database; run: Run } {
     assignments: result.assignments.map((a) => ({
       day: a.day,
       taskId: a.taskId,
+      index: a.index,
       staffId: a.staffId,
       origin: 'auto' as const,
     })),
@@ -49,19 +50,21 @@ function seeded(): { db: Database; run: Run } {
 }
 
 describe('交代できる人', () => {
-  it('同じ時間帯に別の業務を持っている人は出さない', () => {
+  it('同じ時間帯に別の業務を持っている人は、入れられない印が付く', () => {
     const base = databaseWith({ period: '2026-09', staff: STAFF, tasks: TASKS, days: DAYS });
     const plan = buildPlan(base, '2026-09');
     const result = runAssignment(plan, DEFAULT_SETTINGS, DEFAULT_SEED);
     const target = result.assignments.find((a) => a.taskId === 'REC' && a.day === 1)!;
 
-    const candidates = candidatesForSlot(result.assignments, plan, 1, 'REC');
+    const candidates = candidatesForSlot(result.assignments, plan, { day: 1, taskId: 'REC', index: 0 });
     const ids = candidates.map((c) => c.staffId);
     expect(ids).toContain(target.staffId);
     expect(new Set(ids).size).toBe(ids.length);
+    // 今入っている人はそのまま選べる。
+    expect(candidates.find((c) => c.staffId === target.staffId)?.ok).toBe(true);
   });
 
-  it('職種が合わない人は出さない', () => {
+  it('担当できない人も選択肢には出すが、理由を付ける', () => {
     const base = databaseWith({
       period: '2026-09',
       staff: [...STAFF, staff('n', '星野', '看護職員')],
@@ -70,8 +73,11 @@ describe('交代できる人', () => {
     });
     const plan = buildPlan(base, '2026-09');
     const result = runAssignment(plan, DEFAULT_SETTINGS, DEFAULT_SEED);
-    const ids = candidatesForSlot(result.assignments, plan, 1, 'REC').map((c) => c.staffId);
-    expect(ids).not.toContain('n');
+    const candidates = candidatesForSlot(result.assignments, plan, { day: 1, taskId: 'REC', index: 0 });
+    const nurse = candidates.find((c) => c.staffId === 'n');
+    expect(nurse).toBeDefined();
+    expect(nurse?.ok).toBe(false);
+    expect(nurse?.note).toContain('担当できる人');
   });
 });
 
@@ -86,6 +92,7 @@ describe('修正の記録', () => {
       period: '2026-09',
       day: 1,
       taskId: 'REC',
+      index: 0,
       staffBefore: target.staffId,
       staffAfter: other.staffId,
     });
@@ -105,6 +112,7 @@ describe('修正の記録', () => {
       period: '2026-09',
       day: 1,
       taskId: 'REC',
+      index: 0,
       staffBefore: target.staffId,
       staffAfter: other.staffId,
     });
@@ -112,6 +120,46 @@ describe('修正の記録', () => {
     const changed = after.runs[0]!.assignments.find((a) => a.taskId === 'REC' && a.day === 1)!;
     expect(changed.staffId).toBe(other.staffId);
     expect(changed.origin).toBe('manual');
+  });
+
+  it('同じ業務が複数人いても、直した枠だけが変わる', () => {
+    // 昼担当のように1日に同じ業務の枠が並ぶ形。1人だけ入れ替えたいのに
+    // 全部の枠が同じ人になってしまう不具合が実際に起きた。
+    const multi = [task({ taskId: 'NOON', name: '昼担当', slot: SLOT.NOON, headcount: 2 })];
+    const base = databaseWith({ period: '2026-09', staff: STAFF, tasks: multi, days: DAYS });
+    const plan = buildPlan(base, '2026-09');
+    const result = runAssignment(plan, DEFAULT_SETTINGS, DEFAULT_SEED);
+    const run: Run = {
+      runId: 'run_1',
+      period: '2026-09',
+      createdAt: nowIso(),
+      seed: DEFAULT_SEED,
+      cost: result.cost,
+      assignments: result.assignments.map((a) => ({
+        day: a.day, taskId: a.taskId, index: a.index, staffId: a.staffId, origin: 'auto' as const,
+      })),
+    };
+
+    const onDay1 = run.assignments.filter((a) => a.day === 1).sort((a, b) => a.index - b.index);
+    expect(onDay1.length).toBe(2);
+    const [first, second] = onDay1 as [typeof onDay1[0], typeof onDay1[0]];
+    const outsider = STAFF.find((s) => s.staffId !== first.staffId && s.staffId !== second.staffId)!;
+
+    const { db: after } = recordCorrection({ ...base, runs: [run] }, {
+      runId: 'run_1',
+      period: '2026-09',
+      day: 1,
+      taskId: 'NOON',
+      index: first.index,
+      staffBefore: first.staffId,
+      staffAfter: outsider.staffId,
+    });
+
+    const updated = after.runs[0]!.assignments
+      .filter((a) => a.day === 1 && a.taskId === 'NOON')
+      .sort((a, b) => a.index - b.index);
+    expect(updated[0]?.staffId).toBe(outsider.staffId);
+    expect(updated[1]?.staffId).toBe(second.staffId);
   });
 });
 
@@ -134,7 +182,7 @@ describe('学習の提案', () => {
       ...db,
       corrections: [
         {
-          correctionId: 'c1', runId: 'run_1', period: '2026-09', day: 2,
+          correctionId: 'c1', runId: 'run_1', period: '2026-09', day: 2, index: 0,
           taskId: 'REC', staffBefore: 'a', staffAfter: 'b', reason: '', learned: true, createdAt: nowIso(),
         },
       ],
@@ -148,7 +196,7 @@ describe('学習の承認', () => {
   it('承認するとルールになる', () => {
     const { db } = seeded();
     const { db: recorded, correction } = recordCorrection(db, {
-      runId: 'run_1', period: '2026-09', day: 1, taskId: 'REC', staffBefore: 'a', staffAfter: 'b',
+      runId: 'run_1', period: '2026-09', day: 1, taskId: 'REC', index: 0, staffBefore: 'a', staffAfter: 'b',
     });
     const proposal = buildLearningProposals(recorded, '2026-09', 1, 'REC', 'a', 'b')[0]!;
     const learned = applyLearning(recorded, correction.correctionId, proposal);

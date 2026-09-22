@@ -44,7 +44,7 @@ export function buildStats(assignments: readonly Assignment[], plan: Plan): Stat
     eligibilityKey.set(
       id,
       plan.tasks
-        .filter((t) => isEligible(id, t, plan.staffJob))
+        .filter((t) => isEligible(id, t, plan))
         .map((t) => t.taskId)
         .sort()
         .join('+'),

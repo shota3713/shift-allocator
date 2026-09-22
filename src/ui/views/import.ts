@@ -13,12 +13,20 @@ import { addStaff, buildImportReview, upsertShiftTypes } from '../../core/import
 import { planMasterChanges, staffIdFor, type MasterChanges } from '../../core/masters';
 import { rankNameCandidates } from '../../core/resolve';
 import type { ParsedShift } from '../../pdf/types';
+import {
+  PRESENCE,
+  PRESENCE_PRESETS,
+  presetOf,
+  presetPresence,
+  type Presence,
+} from '../../core/shiftCode';
 import type { ShiftType, Staff } from '../../core/types';
 
 interface PendingCode {
   readonly code: string;
   readonly count: number;
-  isWorking: boolean;
+  am: Presence;
+  pm: Presence;
   basis: string;
 }
 
@@ -97,7 +105,8 @@ async function handleFile(file: File, root: HTMLElement, ctx: Ctx): Promise<void
   const pendingCodes: PendingCode[] = changes.newCodes.map((c) => ({
     code: c.code,
     count: c.count,
-    isWorking: c.isWorking,
+    am: c.am,
+    pm: c.pm,
     basis: c.basis,
   }));
   const pendingStaff: PendingStaff[] = changes.newStaff.map((s) => ({
@@ -193,7 +202,8 @@ function renderResult(
     root.append(
       el('h3', { class: 'card__title', style: 'margin-top:var(--step-5)',
         text: `新しい勤務区分（${pendingCodes.length}件）` }),
-      el('p', { class: 'card__body', text: '出勤する日かどうかで、割り振りの対象が決まります。' }),
+      el('p', { class: 'card__body',
+        text: 'どの半日に現場にいるかで、割り振りの対象が決まります。フリーの半日には業務を載せません。' }),
       el('div', { class: 'rows', style: 'margin-top:var(--step-3)' },
         ...pendingCodes.map((code) => renderCodeRow(code, redraw))),
     );
@@ -244,24 +254,28 @@ function renderStaffRow(person: PendingStaff, ctx: Ctx, redraw: () => void): HTM
 }
 
 function renderCodeRow(code: PendingCode, redraw: () => void): HTMLElement {
-  const toggle = el('input', {
-    type: 'checkbox',
-    checked: code.isWorking,
-    'aria-label': `${code.code} は出勤`,
+  const select = el('select', {
+    'aria-label': `${code.code} の勤務`,
     onchange: (event: Event) => {
-      code.isWorking = (event.currentTarget as HTMLInputElement).checked;
+      const next = presetPresence((event.currentTarget as HTMLSelectElement).value);
+      code.am = next.am;
+      code.pm = next.pm;
       code.basis = '手で決めました';
       redraw();
     },
-  });
+  }, ...PRESENCE_PRESETS.map((preset) =>
+    el('option', {
+      value: preset.value,
+      text: preset.label,
+      selected: preset.value === presetOf(code.am, code.pm),
+    })));
 
   return el('div', { class: 'row' },
     el('div', { class: 'row__main' },
       el('span', { class: 'row__title', text: code.code }),
       el('span', { class: 'row__note', text: `この月に ${code.count} 回` }),
       el('span', { class: 'row__note', text: code.basis })),
-    el('label', { class: 'switch' }, toggle,
-      el('span', { text: code.isWorking ? '出勤' : '休み' })));
+    select);
 }
 
 function commit(
@@ -292,13 +306,18 @@ function commit(
       });
     }
 
-    const types: ShiftType[] = pendingCodes.map((c) => ({
-      code: c.code,
-      label: c.code,
-      isWorking: c.isWorking,
-      hours: c.isWorking ? 8 : 0,
-      aliases: [],
-    }));
+    const types: ShiftType[] = pendingCodes.map((c) => {
+      const isWorking = c.am === PRESENCE.WORK || c.pm === PRESENCE.WORK;
+      return {
+        code: c.code,
+        label: c.code,
+        isWorking,
+        hours: isWorking ? 8 : 0,
+        aliases: [],
+        am: c.am,
+        pm: c.pm,
+      };
+    });
 
     return upsertShiftTypes(addStaff({ ...db, aliases }, additions), types);
   });

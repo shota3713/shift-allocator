@@ -5,13 +5,26 @@
 
 import { buildPlan } from '../src/core/plan';
 import { emptyDatabase, type ConfirmedShift, type Database } from '../src/store/db';
+import { PRESENCE } from '../src/core/shiftCode';
 import { SLOT, type ShiftType, type Staff, type Task } from '../src/core/types';
 
 export const WORK: ShiftType = {
   code: '日勤', label: '日勤', isWorking: true, hours: 8, aliases: [],
+  am: PRESENCE.WORK, pm: PRESENCE.WORK,
 };
 export const OFF: ShiftType = {
   code: 'OFF', label: '休み', isWorking: false, hours: 0, aliases: ['休', ''],
+  am: PRESENCE.OFF, pm: PRESENCE.OFF,
+};
+/** 午前だけ現場、午後はフリー。半日の扱いを試すために使う。 */
+export const AM_ONLY: ShiftType = {
+  code: '日/F', label: '日/F', isWorking: true, hours: 4, aliases: [],
+  am: PRESENCE.WORK, pm: PRESENCE.FREE,
+};
+/** 1日フリー。出勤の行に並ぶが業務は載らない。 */
+export const FREE: ShiftType = {
+  code: 'F', label: 'F', isWorking: true, hours: 8, aliases: [],
+  am: PRESENCE.FREE, pm: PRESENCE.FREE,
 };
 
 export function staff(staffId: string, name: string, job: string): Staff {
@@ -24,7 +37,7 @@ export function task(overrides: Partial<Task> & { taskId: string; name: string }
     weight: 1,
     headcount: 1,
     eligibleJob: [],
-    eligibleStaff: [],
+    preferOrder: [],
     exclusiveGroup: '',
     appliesTo: 'all',
     active: true,
@@ -41,16 +54,21 @@ export function databaseWith(options: {
   days: readonly number[];
   /** 出勤しない日を staffId ごとに指定する。 */
   off?: Readonly<Record<string, readonly number[]>>;
+  /** 既定の日勤ではない勤務区分を staffId ごとに指定する。 */
+  codes?: Readonly<Record<string, Readonly<Record<number, string>>>>;
+  /** 誰が何を担当できるか。省略すると職種から判断する。 */
+  skills?: readonly { staffId: string; taskIds: readonly string[] }[];
 }): Database {
   const confirmed: ConfirmedShift[] = [];
   for (const person of options.staff) {
     const offDays = new Set(options.off?.[person.staffId] ?? []);
+    const custom = options.codes?.[person.staffId] ?? {};
     for (const day of options.days) {
       confirmed.push({
         period: options.period,
         staffId: person.staffId,
         day,
-        code: offDays.has(day) ? OFF.code : WORK.code,
+        code: custom[day] ?? (offDays.has(day) ? OFF.code : WORK.code),
       });
     }
   }
@@ -58,7 +76,8 @@ export function databaseWith(options: {
     ...emptyDatabase(),
     staff: [...options.staff],
     tasks: [...options.tasks],
-    shiftTypes: [WORK, OFF],
+    shiftTypes: [WORK, OFF, AM_ONLY, FREE],
+    skills: options.skills ? [...options.skills] : [],
     confirmed,
   };
 }

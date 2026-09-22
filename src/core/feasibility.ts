@@ -5,7 +5,7 @@
  * 実行前に、そもそも埋まらない枠を数えて人に見せる。
  */
 
-import { isEligible } from './assign';
+import { isEligible, isPresent } from './assign';
 import { SLOT_LABELS, type Plan, type Slot, type SlotRequest } from './types';
 
 export interface FeasibilityIssue {
@@ -90,7 +90,8 @@ export function diagnoseFeasibility(plan: Plan): FeasibilityReport {
     const working = plan.workingByDay.get(entry.day) ?? [];
     const candidates = entry.slots.map((slot) => {
       const task = plan.tasksById.get(slot.taskId);
-      return working.filter((staffId) => isEligible(staffId, task, plan.staffJob));
+      return working.filter((staffId) =>
+        isPresent(staffId, entry.day, entry.slot, plan) && isEligible(staffId, task, plan));
     });
 
     const matched = maxMatching(candidates);
@@ -111,7 +112,8 @@ export function diagnoseFeasibility(plan: Plan): FeasibilityReport {
   // 業務ごとに、担当できる人が足りない日を洗う。
   for (const task of plan.tasks) {
     for (const [day, working] of plan.workingByDay) {
-      const eligible = working.filter((staffId) => isEligible(staffId, task, plan.staffJob));
+      const eligible = working.filter((staffId) =>
+        isPresent(staffId, day, task.slot, plan) && isEligible(staffId, task, plan));
       if (eligible.length >= task.headcount) continue;
       const label = SLOT_LABELS[task.slot] ?? task.slot;
       issues.push({
@@ -122,7 +124,7 @@ export function diagnoseFeasibility(plan: Plan): FeasibilityReport {
         need: task.headcount,
         available: eligible.length,
         shortfall: task.headcount - eligible.length,
-        message: `${day}日「${task.name}」: ${task.headcount}人必要だが担当可能な出勤者は ${eligible.length}人（${task.headcount - eligible.length}枠不足）`,
+        message: `${day}日「${task.name}」: ${task.headcount}人必要だがその時間帯に担当できる人は ${eligible.length}人（${task.headcount - eligible.length}枠不足）`,
       });
     }
   }

@@ -6,15 +6,23 @@
  */
 
 import { normalizeName, normalizeText } from './resolve';
+import { PRESENCE, readShiftCode, type Presence } from './shiftCode';
 import { SLOT, type ShiftType, type Staff, type Task } from './types';
 import type { ParsedShift } from '../pdf/types';
 
 /** 休みと推定するコード。確認画面で変えられる。 */
 const OFF_CODE_HINTS = ['休', '有給', '公休', '特休', '欠勤', '希望休', '有休', '代休', '欠'];
 
-/** 業務の初期値。担当者を限定する業務（連絡帳）は設定画面で指定させる。 */
+/**
+ * 業務の初期値。
+ *
+ * 職種はあくまで初期値で、最終的な可否は「担当できる人」の設定で決める。
+ * ドライバーをどの業務にも入れないのは、送迎の担当を別に決めているため。
+ */
 export function defaultTasks(careJobs: readonly string[]): Task[] {
   const care = [...careJobs];
+  const nurse = '看護職員';
+  const careAndNurse = [...care, nurse];
   const lead = 'LEAD';
   const row = (
     taskId: string,
@@ -23,8 +31,7 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     weight: number,
     headcount: number,
     eligibleJob: readonly string[],
-    exclusiveGroup = '',
-    note = '',
+    options: { exclusiveGroup?: string; preferOrder?: readonly string[]; note?: string } = {},
   ): Task => ({
     taskId,
     name,
@@ -32,21 +39,28 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     weight,
     headcount,
     eligibleJob: [...eligibleJob],
-    eligibleStaff: [],
-    exclusiveGroup,
+    preferOrder: [...(options.preferOrder ?? [])],
+    exclusiveGroup: options.exclusiveGroup ?? '',
     appliesTo: 'all',
     active: true,
-    note,
+    note: options.note ?? '',
   });
 
   return [
     row('REHA_AM', 'リハ担当', SLOT.AM, 1.5, 2, care),
-    row('NURSE_AM', '看護師', SLOT.AM, 1.0, 1, ['看護職員']),
+    row('NURSE_AM', '看護師', SLOT.AM, 1.0, 1, [nurse]),
     row('BATH', '入浴担当', SLOT.AM, 1.5, 2, care),
-    row('BATH_LEAD', '入浴リーダー', SLOT.AM, 2.0, 1, care, lead),
-    row('NOON', '昼担当', SLOT.NOON, 1.0, 3, care),
-    row('RENRAKU', '連絡帳', SLOT.PM, 1.5, 1, [], lead, '担当できる人を指定してください'),
-    row('REC_LEAD', 'レクリーダー', SLOT.PM, 2.0, 1, care, lead),
+    row('BATH_LEAD', '入浴リーダー', SLOT.AM, 2.0, 1, care, { exclusiveGroup: lead }),
+    // 昼は看護師と午前だけの人が基本。いなければ遅番が入る。
+    row('NOON', '昼担当', SLOT.NOON, 1.0, 3, careAndNurse, {
+      preferOrder: [`job:${nurse}`, 'amOnly', 'kind:LATE'],
+      note: '看護師 → 午前だけの人 → 遅番 の順で当てます',
+    }),
+    row('RENRAKU', '連絡帳', SLOT.PM, 1.5, 1, careAndNurse, {
+      exclusiveGroup: lead,
+      note: '書ける人を「担当できる人」で絞ってください',
+    }),
+    row('REC_LEAD', 'レクリーダー', SLOT.PM, 2.0, 1, care, { exclusiveGroup: lead }),
     row('TAISO', '体操', SLOT.PM, 1.0, 1, care),
     row('REHA_PM', 'PMリハ', SLOT.PM, 1.5, 1, care),
   ];
@@ -54,7 +68,15 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
 
 /** 休みを表す組み込みの区分。空欄はここに落ちる。 */
 export function defaultShiftTypes(): ShiftType[] {
-  return [{ code: 'OFF', label: '休み', isWorking: false, hours: 0, aliases: ['休', '公休', ''] }];
+  return [{
+    code: 'OFF',
+    label: '休み',
+    isWorking: false,
+    hours: 0,
+    aliases: ['休', '公休', ''],
+    am: PRESENCE.OFF,
+    pm: PRESENCE.OFF,
+  }];
 }
 
 export interface NewStaffProposal {
@@ -75,7 +97,10 @@ export interface NewCodeProposal {
   readonly count: number;
   /** 出勤とみなすかの初期値。人が確認して決める。 */
   readonly isWorking: boolean;
-  /** 初期値の根拠。AI が判断したときはその旨を出す。 */
+  /** 午前・午後それぞれの在所の初期値。 */
+  readonly am: Presence;
+  readonly pm: Presence;
+  /** 初期値の根拠。読み解けなかったときはその旨を出す。 */
   readonly basis: string;
 }
 
@@ -131,11 +156,20 @@ export function planMasterChanges(
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .map(([code, count]) => {
       const looksOff = OFF_CODE_HINTS.some((hint) => code === hint || code.startsWith(hint));
+      const meaning = readShiftCode(code);
+      const am = looksOff ? PRESENCE.OFF : meaning.am;
+      const pm = looksOff ? PRESENCE.OFF : meaning.pm;
       return {
         code,
         count,
-        isWorking: !looksOff,
-        basis: looksOff ? '休みを表す語で始まるため' : '出勤とみなす形のため',
+        isWorking: am === PRESENCE.WORK || pm === PRESENCE.WORK,
+        am,
+        pm,
+        basis: looksOff
+          ? '休みを表す語で始まるため'
+          : meaning.assumed
+            ? `「${meaning.base}」の形が分からないので1日現場と仮定`
+            : meaning.label,
       };
     });
 

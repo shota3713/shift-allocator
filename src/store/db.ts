@@ -9,6 +9,8 @@
  * 壊れかけの状態が残らない。
  */
 
+import { PRESENCE, readShiftCode } from '../core/shiftCode';
+import type { StaffSkills } from '../core/skills';
 import type { LearnedRule, ShiftType, Staff, Task } from '../core/types';
 
 const STORAGE_KEY = 'shift-allocator:v2';
@@ -42,6 +44,8 @@ export interface Run {
   readonly assignments: readonly {
     readonly day: number;
     readonly taskId: string;
+    /** 同じ業務に複数人必要なときの何人目か。手修正はこれで枠を特定する。 */
+    readonly index: number;
     readonly staffId: string;
     readonly origin: 'auto' | 'manual';
   }[];
@@ -53,6 +57,7 @@ export interface Correction {
   readonly period: string;
   readonly day: number;
   readonly taskId: string;
+  readonly index: number;
   readonly staffBefore: string;
   readonly staffAfter: string;
   /** 手で入れ替えた理由。あとでルールを見直すときの手がかりにする。 */
@@ -67,6 +72,8 @@ export interface AppSettings {
   readonly weightFairnessTotal: number;
   readonly weightFairnessTask: number;
   readonly weightLearnedRule: number;
+  /** 業務ごとの「担当してほしい人」の優先順をどれだけ効かせるか。 */
+  readonly weightPreference: number;
   readonly improvementPasses: number;
   readonly seed: number;
 }
@@ -77,6 +84,8 @@ export interface Database {
   readonly aliases: readonly Alias[];
   readonly tasks: readonly Task[];
   readonly shiftTypes: readonly ShiftType[];
+  /** 誰が何を担当できるか。行が無い人は職種の初期値で判断する。 */
+  readonly skills: readonly StaffSkills[];
   readonly confirmed: readonly ConfirmedShift[];
   readonly runs: readonly Run[];
   readonly corrections: readonly Correction[];
@@ -89,6 +98,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   weightFairnessTotal: 10.0,
   weightFairnessTask: 20.0,
   weightLearnedRule: 4.0,
+  weightPreference: 8.0,
   improvementPasses: 5000,
   seed: 20260912,
 };
@@ -100,11 +110,44 @@ export function emptyDatabase(): Database {
     aliases: [],
     tasks: [],
     shiftTypes: [],
+    skills: [],
     confirmed: [],
     runs: [],
     corrections: [],
     rules: [],
     settings: DEFAULT_APP_SETTINGS,
+  };
+}
+
+/**
+ * 勤務区分に午前・午後の在所を補う。
+ * 古い保存データはこの2つを持たないので、コードの形から起こす。
+ */
+function normalizeShiftType(type: ShiftType): ShiftType {
+  const parsed = readShiftCode(type.code ?? '');
+  const off = type.isWorking === false;
+  return {
+    ...type,
+    aliases: Array.isArray(type.aliases) ? type.aliases : [],
+    am: off ? PRESENCE.OFF : type.am ?? parsed.am,
+    pm: off ? PRESENCE.OFF : type.pm ?? parsed.pm,
+  };
+}
+
+/**
+ * 割り当てに「何人目の枠か」を補う。
+ * 古い保存データには無く、これが無いと同じ業務の枠を区別できない。
+ */
+function normalizeRun(run: Run): Run {
+  const seen = new Map<string, number>();
+  return {
+    ...run,
+    assignments: (Array.isArray(run.assignments) ? run.assignments : []).map((a) => {
+      const key = `${a.day}#${a.taskId}`;
+      const next = seen.get(key) ?? 0;
+      seen.set(key, next + 1);
+      return { ...a, index: typeof a.index === 'number' ? a.index : next };
+    }),
   };
 }
 
@@ -118,10 +161,11 @@ function normalize(raw: unknown): Database {
     version: 2,
     staff: list<Staff>(value.staff),
     aliases: list<Alias>(value.aliases),
-    tasks: list<Task>(value.tasks),
-    shiftTypes: list<ShiftType>(value.shiftTypes),
+    tasks: list<Task>(value.tasks).map((t) => ({ ...t, preferOrder: t.preferOrder ?? [] })),
+    shiftTypes: list<ShiftType>(value.shiftTypes).map(normalizeShiftType),
+    skills: list<StaffSkills>(value.skills),
     confirmed: list<ConfirmedShift>(value.confirmed),
-    runs: list<Run>(value.runs),
+    runs: list<Run>(value.runs).map(normalizeRun),
     corrections: list<Correction>(value.corrections),
     rules: list<LearnedRule>(value.rules),
     settings: { ...DEFAULT_APP_SETTINGS, ...(value.settings ?? {}) },

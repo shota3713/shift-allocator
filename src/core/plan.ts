@@ -3,12 +3,19 @@
  *
  * ここが保存層と計算をつなぐ唯一の場所。assign.ts / feasibility.ts は
  * Plan しか知らないので、保存の形を変えてもアルゴリズムは動き続ける。
+ *
+ * この層で2つを解決しておく:
+ *   - 勤務区分コード → 午前・午後どちらに現場にいるか（フリーは割り振らない）
+ *   - 職種の初期値 + 個人の設定 → 業務ごとに担当できる人
  */
 
-import { isEligible, taskAppliesTo } from './assign';
+import { taskAppliesTo } from './assign';
+import { buildCapableMap } from './skills';
+import { PRESENCE, SHIFT_KIND, readShiftCode, type Presence, type ShiftKind } from './shiftCode';
 import {
   SLOT,
   WEEKDAY_KEYS,
+  type DayPresence,
   type LearnedRule,
   type Plan,
   type SlotRequest,
@@ -25,6 +32,43 @@ function activeRules(db: Database): LearnedRule[] {
   return db.rules.filter((r) => r.enabled && r.ruleId);
 }
 
+interface CodeMeaning {
+  readonly am: Presence;
+  readonly pm: Presence;
+  readonly kind: ShiftKind;
+  readonly amOnly: boolean;
+}
+
+/**
+ * 勤務区分ごとの在所。登録済みの設定を優先し、無いものはコードから読む。
+ * 未登録のコードでも「1日フリー」を勝手に出勤扱いしないのが要点。
+ */
+function codeMeanings(db: Database): Map<string, CodeMeaning> {
+  const map = new Map<string, CodeMeaning>();
+  for (const type of db.shiftTypes) {
+    if (!type.code) continue;
+    const parsed = readShiftCode(type.code);
+    const am = type.am ?? parsed.am;
+    const pm = type.pm ?? parsed.pm;
+    // 「休み」に倒してある区分は、コードの形より設定を信じる。
+    const forcedOff = type.isWorking === false;
+    map.set(type.code, {
+      am: forcedOff ? PRESENCE.OFF : am,
+      pm: forcedOff ? PRESENCE.OFF : pm,
+      kind: forcedOff ? SHIFT_KIND.OFF : parsed.kind,
+      amOnly: !forcedOff && am === PRESENCE.WORK && pm !== PRESENCE.WORK,
+    });
+  }
+  return map;
+}
+
+function meaningFor(code: string, known: ReadonlyMap<string, CodeMeaning>): CodeMeaning {
+  const hit = known.get(code);
+  if (hit) return hit;
+  const parsed = readShiftCode(code);
+  return { am: parsed.am, pm: parsed.pm, kind: parsed.kind, amOnly: parsed.amOnly };
+}
+
 /**
  * 対象月の Plan を組む。
  *
@@ -36,16 +80,34 @@ export function buildPlan(db: Database, periodKey: string): Plan {
   const year = Number(yearText);
   const month = Number(monthText);
 
-  const workingCodes = new Set(db.shiftTypes.filter((t) => t.isWorking).map((t) => t.code));
+  const known = codeMeanings(db);
 
+  const presence = new Map<string, Map<number, DayPresence>>();
   const workingByStaff = new Map<string, Set<number>>();
   const workingByDay = new Map<number, string[]>();
+
   for (const c of db.confirmed) {
     if (c.period !== periodKey) continue;
-    if (!workingCodes.has(c.code)) continue;
+    const meaning = meaningFor(c.code, known);
+    const am = meaning.am === PRESENCE.WORK;
+    const pm = meaning.pm === PRESENCE.WORK;
+    if (!am && !pm) continue;
+
+    const byDay = presence.get(c.staffId) ?? new Map<number, DayPresence>();
+    byDay.set(c.day, {
+      code: c.code,
+      am,
+      pm,
+      noon: am || pm,
+      kind: meaning.kind,
+      amOnly: meaning.amOnly,
+    });
+    presence.set(c.staffId, byDay);
+
     const days = workingByStaff.get(c.staffId);
     if (days) days.add(c.day);
     else workingByStaff.set(c.staffId, new Set([c.day]));
+
     const staffOnDay = workingByDay.get(c.day);
     if (staffOnDay) staffOnDay.push(c.staffId);
     else workingByDay.set(c.day, [c.staffId]);
@@ -66,16 +128,23 @@ export function buildPlan(db: Database, periodKey: string): Plan {
       slot: (String(t.slot).toUpperCase() as Task['slot']) || SLOT.AM,
       weight: Number(t.weight) || 1,
       headcount: Math.max(1, Number(t.headcount) || 1),
+      preferOrder: t.preferOrder ?? [],
     }));
   const tasksById = new Map(tasks.map((t) => [t.taskId, t]));
   const staffIds = [...workingByStaff.keys()].sort();
+
+  const capable = buildCapableMap(
+    staffIds.map((staffId) => ({ staffId, job: staffJob.get(staffId) ?? '' })),
+    tasks,
+    db.skills,
+  );
 
   // 「担当できる人が何人いるか」を制約の強さの尺度にする。
   // 職種指定の有無だけで判断すると、看護師枠（4人）と介助業務（11人）が
   // 同列に扱われ、看護職員が先に介助へ取られて看護師枠が埋まらなくなる。
   const eligibleCount = new Map<string, number>();
   for (const task of tasks) {
-    eligibleCount.set(task.taskId, staffIds.filter((id) => isEligible(id, task, staffJob)).length);
+    eligibleCount.set(task.taskId, capable.get(task.taskId)?.size ?? 0);
   }
 
   const slots: SlotRequest[] = [];
@@ -111,6 +180,8 @@ export function buildPlan(db: Database, periodKey: string): Plan {
     staffIds,
     staffJob,
     staffNames,
+    presence,
+    capable,
     rules: activeRules(db),
   };
 }

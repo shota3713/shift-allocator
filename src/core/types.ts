@@ -5,6 +5,8 @@
  * 計算（assign / feasibility）は保存層を知らず、この型だけを受け取る。
  */
 
+import type { Presence, ShiftKind } from './shiftCode';
+
 /** 時間帯。同じ時間帯に1人が持てる業務は1つだけ（体は1つしかない）。 */
 export const SLOT = { AM: 'AM', NOON: 'NOON', PM: 'PM' } as const;
 export type Slot = (typeof SLOT)[keyof typeof SLOT];
@@ -27,13 +29,20 @@ export interface Staff {
   readonly note: string;
 }
 
-/** 勤務区分。is_working が false の日は割り当て対象外。 */
+/**
+ * 勤務区分。
+ *
+ * 出勤かどうかだけでは足りない。「日/F」のように半日だけ現場にいる勤務が
+ * あるので、午前・午後それぞれの在所を持つ。業務を割り振るのは work の半日だけ。
+ */
 export interface ShiftType {
   readonly code: string;
   readonly label: string;
   readonly isWorking: boolean;
   readonly hours: number;
   readonly aliases: readonly string[];
+  readonly am: Presence;
+  readonly pm: Presence;
 }
 
 /** 業務の適用対象。曜日指定はカンマ区切りの WeekdayKey。 */
@@ -46,10 +55,14 @@ export interface Task {
   /** 負担の重み。リーダー業務ほど重い。 */
   readonly weight: number;
   readonly headcount: number;
-  /** 空なら職種を問わない。 */
+  /** 担当可否の初期値に使う職種。個人の設定（skills）があればそちらが勝つ。 */
   readonly eligibleJob: readonly string[];
-  /** 空なら指名なし。 */
-  readonly eligibleStaff: readonly string[];
+  /**
+   * 担当してほしい人の優先順。前にあるものから順に当てる。
+   * 'job:看護職員' / 'kind:LATE' / 'amOnly' / 'pmOnly' が書ける。
+   * 例）昼担当は 看護師 → 午前だけの人 → 遅番。
+   */
+  readonly preferOrder: readonly string[];
   /** 同じ値を持つ業務は、同じ人が同じ日に兼任できない。 */
   readonly exclusiveGroup: string;
   readonly appliesTo: AppliesTo;
@@ -94,6 +107,8 @@ export interface Assignment {
   readonly day: number;
   readonly weekday: WeekdayKey;
   readonly taskId: string;
+  /** 同じ業務に複数人必要なときの何人目か。0起点。 */
+  readonly index: number;
   /** 埋まらなかった枠は空文字。 */
   readonly staffId: string;
 }
@@ -113,7 +128,22 @@ export interface Plan {
   readonly staffIds: readonly string[];
   readonly staffJob: ReadonlyMap<string, string>;
   readonly staffNames: ReadonlyMap<string, string>;
+  /** staffId → 日 → その日の在所。半日単位の可否はここだけで決まる。 */
+  readonly presence: ReadonlyMap<string, ReadonlyMap<number, DayPresence>>;
+  /** taskId → 担当できる staffId。職種の初期値と個人の設定を合わせた結果。 */
+  readonly capable: ReadonlyMap<string, ReadonlySet<string>>;
   readonly rules: readonly LearnedRule[];
+}
+
+/** ある人のある日の在所。 */
+export interface DayPresence {
+  readonly code: string;
+  readonly am: boolean;
+  readonly noon: boolean;
+  readonly pm: boolean;
+  readonly kind: ShiftKind;
+  /** 午前だけ現場にいる。昼担当の優先対象。 */
+  readonly amOnly: boolean;
 }
 
 /**
@@ -127,6 +157,8 @@ export interface AssignSettings {
   readonly weightFairnessTotal: number;
   readonly weightFairnessTask: number;
   readonly weightLearnedRule: number;
+  /** 業務ごとの「担当してほしい人」の優先順をどれだけ効かせるか。 */
+  readonly weightPreference: number;
   readonly improvementPasses: number;
 }
 
@@ -134,6 +166,7 @@ export const DEFAULT_SETTINGS: AssignSettings = {
   weightFairnessTotal: 10.0,
   weightFairnessTask: 20.0,
   weightLearnedRule: 4.0,
+  weightPreference: 8.0,
   improvementPasses: 5000,
 };
 

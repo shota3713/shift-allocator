@@ -5,13 +5,13 @@
  * 時間帯ごとの業務・担当を公平に割り振る。
  *
  * ハード制約（絶対に破らない）:
- *   - 出勤していない日には割り当てない
- *   - 職種・指名による担当可否（eligibleJob / eligibleStaff）
+ *   - その時間帯に現場にいない人には割り当てない（1日フリー・午後フリーを含む）
+ *   - 担当できない業務は割り当てない（職種の初期値 + 個人ごとの設定）
  *   - 同じ時間帯に1人が持てる業務は1つだけ
  *   - 同じ exclusiveGroup の業務を、同じ人が同じ日に持たない
  *
  * ソフト制約（コスト関数で最小化）:
- *   - 総負担の偏り / 業務ごとの回数の偏り / 学習ルール
+ *   - 総負担の偏り / 業務ごとの回数の偏り / 担当してほしい人の優先順 / 学習ルール
  *
  * 設計上の制約: 同じ入力 + 同じ設定 + 同じ seed なら必ず同じ結果になること。
  * これがないと「修正を学習した効果」を検証できない。
@@ -23,6 +23,7 @@ import {
   type AssignSettings,
   type LearnedRule,
   type Plan,
+  type Slot,
   type SlotRequest,
   type Task,
   type WeekdayKey,
@@ -33,12 +34,45 @@ interface Load {
   byTask: Map<string, number>;
 }
 
-/** 職種・指名による担当可否。 */
-export function isEligible(staffId: string, task: Task | undefined, staffJob: ReadonlyMap<string, string>): boolean {
+/**
+ * その業務を担当できる人か。
+ * 判断はすべて Plan.capable に集約してある（職種の初期値 + 個人の設定）。
+ */
+export function isEligible(staffId: string, task: Task | undefined, plan: Plan): boolean {
   if (!task) return false;
-  if (task.eligibleStaff.length > 0 && !task.eligibleStaff.includes(staffId)) return false;
-  if (task.eligibleJob.length > 0 && !task.eligibleJob.includes(staffJob.get(staffId) ?? '')) return false;
-  return true;
+  return plan.capable.get(task.taskId)?.has(staffId) === true;
+}
+
+/**
+ * その時間帯に現場にいるか。
+ * 「出勤している」では足りない。1日フリー（F）も、午後フリー（日/F）も
+ * 勤務表では出勤の行に並ぶが、その半日に業務は載せられない。
+ */
+export function isPresent(staffId: string, day: number, slot: Slot, plan: Plan): boolean {
+  const here = plan.presence.get(staffId)?.get(day);
+  if (!here) return false;
+  if (slot === 'AM') return here.am;
+  if (slot === 'PM') return here.pm;
+  return here.noon;
+}
+
+/**
+ * 「担当してほしい人」の優先順の何番目か。小さいほど望ましい。
+ * 当てはまらない人は末尾扱いにする（禁止ではない。いなければ回ってくる）。
+ */
+export function preferenceTier(staffId: string, task: Task, day: number, plan: Plan): number {
+  if (task.preferOrder.length === 0) return 0;
+  const here = plan.presence.get(staffId)?.get(day);
+  const job = plan.staffJob.get(staffId) ?? '';
+
+  for (let i = 0; i < task.preferOrder.length; i += 1) {
+    const token = task.preferOrder[i] as string;
+    if (token.startsWith('job:') && token.slice(4) === job) return i;
+    if (token.startsWith('kind:') && here && token.slice(5) === here.kind) return i;
+    if (token === 'amOnly' && here?.amOnly === true) return i;
+    if (token === 'pmOnly' && here && here.pm && !here.am) return i;
+  }
+  return task.preferOrder.length;
 }
 
 /** その業務がその曜日に発生するか。 */
@@ -85,9 +119,10 @@ export function canAssign(
   plan: Plan,
   excludeIndex: number,
 ): boolean {
-  const working = plan.workingByStaff.get(staffId);
-  if (!working || !working.has(slot.day)) return false;
-  if (!isEligible(staffId, plan.tasksById.get(slot.taskId), plan.staffJob)) return false;
+  const task = plan.tasksById.get(slot.taskId);
+  if (!task) return false;
+  if (!isPresent(staffId, slot.day, task.slot, plan)) return false;
+  if (!isEligible(staffId, task, plan)) return false;
   if (hasConflict(staffId, slot, assignments, plan, excludeIndex)) return false;
   return true;
 }
@@ -140,10 +175,36 @@ function candidateScore(
 
   const totalRate = entry.total / workdays;
   const taskRate = (entry.byTask.get(slot.taskId) ?? 0) / workdays;
+  const task = plan.tasksById.get(slot.taskId);
+  const tier = task ? preferenceTier(staffId, task, slot.day, plan) : 0;
 
   return settings.weightFairnessTotal * totalRate
     + settings.weightFairnessTask * taskRate
+    + settings.weightPreference * tier
     + settings.weightLearnedRule * rulePenalty(staffId, slot, plan.rules);
+}
+
+/** 候補を、いま出せる中で最も上の優先順の人だけに絞る。 */
+function bestTierOnly(
+  candidates: readonly string[],
+  task: Task,
+  day: number,
+  plan: Plan,
+): string[] {
+  if (task.preferOrder.length === 0) return [...candidates];
+  let best = Number.POSITIVE_INFINITY;
+  for (const staffId of candidates) {
+    const tier = preferenceTier(staffId, task, day, plan);
+    if (tier < best) best = tier;
+  }
+  return candidates.filter((staffId) => preferenceTier(staffId, task, day, plan) === best);
+}
+
+/** その割り当ての優先順。入れ替えで順位を落とさないための判定に使う。 */
+function tierOf(assignment: Assignment, plan: Plan, staffId: string): number {
+  const task = plan.tasksById.get(assignment.taskId);
+  if (!task || !staffId) return 0;
+  return preferenceTier(staffId, task, assignment.day, plan);
 }
 
 /** 決定論的な擬似乱数。同じ seed なら同じ列を返す。 */
@@ -181,6 +242,7 @@ export function totalCost(
 ): number {
   const load = initLoad(plan);
   let rulePart = 0;
+  let preferencePart = 0;
 
   for (const a of assignments) {
     const entry = a.staffId ? load.get(a.staffId) : undefined;
@@ -189,6 +251,7 @@ export function totalCost(
     entry.total += task ? task.weight : 1;
     entry.byTask.set(a.taskId, (entry.byTask.get(a.taskId) ?? 0) + 1);
     rulePart += rulePenalty(a.staffId, { taskId: a.taskId, weekday: a.weekday }, plan.rules);
+    if (task) preferencePart += preferenceTier(a.staffId, task, a.day, plan);
   }
 
   const normalized = plan.staffIds.map(
@@ -200,7 +263,7 @@ export function totalCost(
   // 回数そのものではなく「出勤1日あたりの回数」で比べる。
   let taskVariance = 0;
   for (const task of plan.tasks) {
-    const eligible = plan.staffIds.filter((id) => isEligible(id, task, plan.staffJob));
+    const eligible = plan.staffIds.filter((id) => isEligible(id, task, plan));
     if (eligible.length === 0) continue;
     const rates = eligible.map(
       (id) => ((load.get(id) as Load).byTask.get(task.taskId) ?? 0) / workdaysOf(plan, id),
@@ -213,6 +276,7 @@ export function totalCost(
 
   return settings.weightFairnessTotal * variance(normalized)
     + settings.weightFairnessTask * taskVariance
+    + settings.weightPreference * preferencePart
     + settings.weightLearnedRule * rulePart
     + unfilled * 1000;
 }
@@ -224,13 +288,23 @@ function greedyAssign(plan: Plan, settings: AssignSettings, seed: number): Assig
 
   plan.slots.forEach((slot, slotIndex) => {
     // 未確定の枠も先に置く。hasConflict が走査できるようにするため。
-    result.push({ day: slot.day, taskId: slot.taskId, staffId: '', weekday: slot.weekday });
+    result.push({
+      day: slot.day, taskId: slot.taskId, index: slot.index, staffId: '', weekday: slot.weekday,
+    });
     const here = result.length - 1;
 
-    const candidates = (plan.workingByDay.get(slot.day) ?? []).filter(
+    const allowed = (plan.workingByDay.get(slot.day) ?? []).filter(
       (staffId) => canAssign(staffId, slot, result, plan, here),
     );
-    if (candidates.length === 0) return;
+    if (allowed.length === 0) return;
+
+    // 優先順は公平さより先に効かせる。「昼担当は看護師か午前だけの人、
+    // いなければ遅番」という決め方は、上の順位の人がいる限り下へ降りない。
+    // 公平さは同じ順位の中だけで効かせる。
+    const task = plan.tasksById.get(slot.taskId);
+    const candidates = task
+      ? bestTierOnly(allowed, task, slot.day, plan)
+      : allowed;
 
     let bestStaff = '';
     let bestScore = Number.POSITIVE_INFINITY;
@@ -246,7 +320,9 @@ function greedyAssign(plan: Plan, settings: AssignSettings, seed: number): Assig
     const entry = load.get(bestStaff) as Load;
     entry.total += slot.weight;
     entry.byTask.set(slot.taskId, (entry.byTask.get(slot.taskId) ?? 0) + 1);
-    result[here] = { day: slot.day, taskId: slot.taskId, staffId: bestStaff, weekday: slot.weekday };
+    result[here] = {
+      day: slot.day, taskId: slot.taskId, index: slot.index, staffId: bestStaff, weekday: slot.weekday,
+    };
   });
 
   return result;
@@ -278,6 +354,12 @@ function improve(
     if (!a.staffId || !b.staffId || a.staffId === b.staffId) continue;
     if (!canAssign(b.staffId, a, current, plan, i)) continue;
     if (!canAssign(a.staffId, b, current, plan, j)) continue;
+
+    // 公平さのために優先順を下げない。ここを許すと「看護師がいるのに
+    // 別の人が昼担当」という入れ替えが、分散を下げる名目で通ってしまう。
+    const before = tierOf(a, plan, a.staffId) + tierOf(b, plan, b.staffId);
+    const after = tierOf(a, plan, b.staffId) + tierOf(b, plan, a.staffId);
+    if (after > before) continue;
 
     const candidate = [...current];
     candidate[i] = { ...a, staffId: b.staffId };

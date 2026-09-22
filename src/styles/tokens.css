@@ -6,7 +6,7 @@
  */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* 面。奥から手前へ3段。影ではなく面の差で層を作る。 */
   --paper: oklch(96.5% 0.008 85);
@@ -67,62 +67,5 @@
   --font-figure: ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --paper: oklch(18% 0.012 250);
-    --surface: oklch(21.5% 0.014 250);
-    --surface-raised: oklch(25% 0.015 250);
-    --surface-sunken: oklch(15% 0.012 250);
 
-    --ink: oklch(94% 0.006 85);
-    --ink-soft: oklch(75% 0.008 85);
-    --ink-faint: oklch(58% 0.008 85);
-
-    --line: oklch(30% 0.014 250);
-    --line-strong: oklch(40% 0.016 250);
-
-    --accent: oklch(72% 0.09 190);
-    --accent-press: oklch(64% 0.09 190);
-    --accent-wash: oklch(28% 0.04 190);
-    --on-accent: oklch(16% 0.012 250);
-
-    --blocked: oklch(70% 0.15 25);
-    --blocked-wash: oklch(28% 0.06 25);
-    --caution: oklch(76% 0.11 75);
-    --caution-wash: oklch(29% 0.05 75);
-    --settled: oklch(72% 0.09 155);
-    --settled-wash: oklch(26% 0.045 155);
-
-    --shadow-lift: 0 1px 2px oklch(0% 0 0 / 0.3), 0 8px 24px -10px oklch(0% 0 0 / 0.6);
-    --shadow-sheet: 0 -2px 10px oklch(0% 0 0 / 0.35), 0 -20px 50px -20px oklch(0% 0 0 / 0.7);
-  }
-}
-
-:root[data-theme="dark"] {
-  --paper: oklch(18% 0.012 250);
-  --surface: oklch(21.5% 0.014 250);
-  --surface-raised: oklch(25% 0.015 250);
-  --surface-sunken: oklch(15% 0.012 250);
-
-  --ink: oklch(94% 0.006 85);
-  --ink-soft: oklch(75% 0.008 85);
-  --ink-faint: oklch(58% 0.008 85);
-
-  --line: oklch(30% 0.014 250);
-  --line-strong: oklch(40% 0.016 250);
-
-  --accent: oklch(72% 0.09 190);
-  --accent-press: oklch(64% 0.09 190);
-  --accent-wash: oklch(28% 0.04 190);
-  --on-accent: oklch(16% 0.012 250);
-
-  --blocked: oklch(70% 0.15 25);
-  --blocked-wash: oklch(28% 0.06 25);
-  --caution: oklch(76% 0.11 75);
-  --caution-wash: oklch(29% 0.05 75);
-  --settled: oklch(72% 0.09 155);
-  --settled-wash: oklch(26% 0.045 155);
-
-  --shadow-lift: 0 1px 2px oklch(0% 0 0 / 0.3), 0 8px 24px -10px oklch(0% 0 0 / 0.6);
-  --shadow-sheet: 0 -2px 10px oklch(0% 0 0 / 0.35), 0 -20px 50px -20px oklch(0% 0 0 / 0.7);
-}
+/* 暗色は用意しない。紙の帳票に合わせた明色1本で通す。 */
