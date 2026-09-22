@@ -5,6 +5,7 @@
  * 計算（assign / feasibility）は保存層を知らず、この型だけを受け取る。
  */
 
+import type { DifficultyLevel } from './difficulty';
 import type { Presence, ShiftKind } from './shiftCode';
 
 /** 時間帯。同じ時間帯に1人が持てる業務は1つだけ（体は1つしかない）。 */
@@ -52,9 +53,23 @@ export interface Task {
   readonly taskId: string;
   readonly name: string;
   readonly slot: Slot;
-  /** 負担の重み。リーダー業務ほど重い。 */
-  readonly weight: number;
+  /** 難易度。5段階。計算に使う重みはここから引く（weightOf）。 */
+  readonly difficulty: DifficultyLevel;
   readonly headcount: number;
+  /**
+   * 人が足りない日に、ここまでなら人数を減らしてよいという下限。
+   * 例）午前に5人しかいない日は、リハ担当を2人から1人に落として
+   * 風呂3・リハ1・看護1 にする。headcount と同じなら減らさない。
+   */
+  readonly minHeadcount: number;
+  /**
+   * 同じ時間帯の他の業務と掛け持ちしてよいか。
+   * 体操のように短く済む業務だけ true にする。空いている人が優先で、
+   * いないときだけ掛け持ちになる。
+   */
+  readonly allowSameSlot: boolean;
+  /** 同じ日に持たせたくない業務。掛け持ちを許した業務の例外を書く。 */
+  readonly avoidWith: readonly string[];
   /** 担当可否の初期値に使う職種。個人の設定（skills）があればそちらが勝つ。 */
   readonly eligibleJob: readonly string[];
   /**

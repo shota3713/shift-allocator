@@ -23,7 +23,7 @@ const CARE_TEAM = [
 const TASKS = [
   task({ taskId: 'BATH', name: '入浴担当', slot: SLOT.AM, headcount: 2, eligibleJob: ['介護職員'] }),
   task({ taskId: 'NURSE', name: '看護師', slot: SLOT.AM, eligibleJob: ['看護職員'] }),
-  task({ taskId: 'REC', name: 'レクリーダー', slot: SLOT.PM, weight: 2, eligibleJob: ['介護職員'] }),
+  task({ taskId: 'REC', name: 'レクリーダー', slot: SLOT.PM, difficulty: 4, eligibleJob: ['介護職員'] }),
 ];
 
 const basePlan = () => planFor({ period: '2026-09', staff: CARE_TEAM, tasks: TASKS, days: DAYS });

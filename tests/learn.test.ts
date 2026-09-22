@@ -23,7 +23,7 @@ const STAFF = [
   staff('c', '上田', '介護職員'),
 ];
 const TASKS = [
-  task({ taskId: 'REC', name: 'レクリーダー', slot: SLOT.PM, weight: 2, eligibleJob: ['介護職員'] }),
+  task({ taskId: 'REC', name: 'レクリーダー', slot: SLOT.PM, difficulty: 4, eligibleJob: ['介護職員'] }),
   task({ taskId: 'BATH', name: '入浴担当', slot: SLOT.AM, eligibleJob: ['介護職員'] }),
 ];
 const DAYS = [1, 2, 3, 4, 5];

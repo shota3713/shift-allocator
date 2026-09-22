@@ -8,10 +8,11 @@
 
 import type { Ctx } from '../app';
 import { el, openSheet, toast } from '../dom';
+import { DEFAULT_DIFFICULTY, DIFFICULTY_LEVELS, labelOf } from '../../core/difficulty';
 import { describeRules } from '../../core/learn';
 import { defaultTasks } from '../../core/masters';
 import { taskIdsFor } from '../../core/skills';
-import { exportBackup, importBackup, saveDatabase, type Database } from '../../store/db';
+import { exportBackup, importBackup, newId, saveDatabase, type Database } from '../../store/db';
 import { SLOT_LABELS, SLOT_ORDER, type Task } from '../../core/types';
 import { renderCapability } from './capability';
 import { renderShiftTypes } from './shiftTypes';
@@ -31,10 +32,17 @@ export function renderSettings(root: HTMLElement, ctx: Ctx): void {
               text: '標準の業務を作る',
               onclick: () => {
                 ctx.update((current) => ({ ...current, tasks: defaultTasks(current.settings.careJobs) }));
-                toast('標準の9業務を作りました。');
+                toast(`標準の${defaultTasks(ctx.db.settings.careJobs).length}業務を作りました。`);
               },
             })))
       : el('div', { class: 'rows' }, ...db.tasks.map((task) => renderTaskRow(task, ctx))),
+    el('div', { class: 'actions', style: 'margin-top:var(--step-3)' },
+      el('button', {
+        class: 'btn btn--quiet btn--small',
+        type: 'button',
+        text: '業務を追加する',
+        onclick: () => openTaskPicker(ctx),
+      })),
   );
 
   renderCapability(root, ctx);
@@ -129,54 +137,154 @@ function renderTaskRow(task: Task, ctx: Ctx): HTMLElement {
     el('div', { class: 'row__main' },
       el('span', { class: 'row__title', text: task.name }),
       el('span', { class: 'row__note',
-        text: `${SLOT_LABELS[task.slot]} / ${task.headcount}人必要 / 担当できる人 ${capable}人` }),
+        text: `${SLOT_LABELS[task.slot]} / ${task.headcount}人必要 / 難易度 ${task.difficulty}（${labelOf(task.difficulty)}） / 担当できる人 ${capable}人` }),
       task.note ? el('span', { class: 'row__note', text: task.note }) : null),
     el('span', { class: task.active ? 'pill pill--settled' : 'pill', text: task.active ? '有効' : '停止' }));
 }
 
-function openTaskEditor(task: Task, ctx: Ctx): void {
-  const name = el('input', { type: 'text', value: task.name });
+function openTaskEditor(task: Task, ctx: Ctx, isNew = false): void {
+  const name = el('input', { type: 'text', value: task.name, placeholder: '例）手作業' });
   const slot = el('select', {}, ...SLOT_ORDER.map((s) =>
     el('option', { value: s, text: SLOT_LABELS[s], selected: task.slot === s })));
   const headcount = el('input', { type: 'number', min: '1', max: '20', value: String(task.headcount) });
-  const weight = el('input', { type: 'number', min: '0.5', max: '5', step: '0.5', value: String(task.weight) });
+  const minHeadcount = el('input', {
+    type: 'number', min: '1', max: '20', value: String(task.minHeadcount),
+  });
+  const difficulty = el('select', { 'aria-label': '難易度' },
+    ...DIFFICULTY_LEVELS.map((level) =>
+      el('option', {
+        value: String(level.level),
+        text: `${level.level}. ${level.label} — ${level.hint}`,
+        selected: level.level === task.difficulty,
+      })));
   const jobs = el('input', { type: 'text', value: task.eligibleJob.join('、') });
   const active = el('input', { type: 'checkbox', checked: task.active });
 
   const close = openSheet({
-    title: task.name,
+    title: isNew ? '業務を追加する' : task.name,
     lead: '人ごとの担当可否は「担当できる人」で選びます。ここは業務そのものの形。',
     body: el('div', {},
       field('業務名', name),
       field('時間帯', slot),
       field('必要人数', headcount),
-      field('負担の重み', weight, 'リーダー業務ほど大きく。公平さの計算に使います。'),
+      field('人が足りない日の最低人数', minHeadcount,
+        '出られる人が少ない日は、ここまで人数を落として枠を立てます。減らしたくなければ必要人数と同じに。'),
+      field('難易度', difficulty, '5段階。高いほど、同じ人に続けて当たらないようにします。'),
       field('職種の初期値', jobs, 'まだ選んでいない人をこの職種で判断します。「、」で区切ります。'),
-      task.preferOrder.length > 0
-        ? el('p', { class: 'field__hint', style: 'margin-bottom:var(--step-4)',
-            text: `優先順: ${task.note || task.preferOrder.join(' → ')}` })
+      task.preferOrder.length > 0 || task.allowSameSlot
+        ? el('p', { class: 'field__hint', style: 'margin-bottom:var(--step-4)', text: task.note })
         : null,
       el('label', { class: 'switch' }, active, el('span', { text: 'この業務を割り振る' })),
       el('div', { class: 'actions' },
         el('button', {
           class: 'btn btn--primary',
           type: 'button',
-          text: '保存する',
+          text: isNew ? '追加する' : '保存する',
           onclick: () => {
+            const head = Math.max(1, Number(headcount.value) || 1);
+            const patch = {
+              name: name.value.trim() || task.name,
+              slot: slot.value as Task['slot'],
+              headcount: head,
+              minHeadcount: Math.min(head, Math.max(1, Number(minHeadcount.value) || head)),
+              difficulty: Number(difficulty.value) as Task['difficulty'],
+              eligibleJob: jobs.value.split(/[、,|]/u).map((s) => s.trim()).filter(Boolean),
+              active: active.checked,
+            };
+            if (isNew && !patch.name.trim()) {
+              toast('業務名を入れてください。', 'blocked');
+              return;
+            }
             ctx.update((db) => ({
               ...db,
-              tasks: db.tasks.map((t) => t.taskId !== task.taskId ? t : {
-                ...t,
-                name: name.value.trim() || t.name,
-                slot: slot.value as Task['slot'],
-                headcount: Math.max(1, Number(headcount.value) || 1),
-                weight: Number(weight.value) || 1,
-                eligibleJob: jobs.value.split(/[、,|]/u).map((s) => s.trim()).filter(Boolean),
-                active: active.checked,
-              }),
+              tasks: isNew
+                ? [...db.tasks, { ...task, ...patch }]
+                : db.tasks.map((t) => (t.taskId !== task.taskId ? t : { ...t, ...patch })),
             }));
             close();
-            toast('保存しました。');
+            toast(isNew ? `${patch.name} を追加しました。` : '保存しました。');
+          },
+        }),
+        el('button', { class: 'btn btn--quiet', type: 'button', text: 'やめる', onclick: () => close() }),
+        isNew
+          ? null
+          : el('button', {
+              class: 'btn btn--danger btn--small',
+              type: 'button',
+              text: 'この業務を消す',
+              onclick: () => {
+                ctx.update((db) => ({
+                  ...db,
+                  tasks: db.tasks.filter((t) => t.taskId !== task.taskId),
+                  skills: db.skills.map((s) => ({
+                    ...s,
+                    taskIds: s.taskIds.filter((id) => id !== task.taskId),
+                  })),
+                }));
+                close();
+                toast(`${task.name} を消しました。`);
+              },
+            }))),
+  });
+}
+
+/**
+ * 業務を足す。
+ *
+ * 標準の業務でまだ入っていないものを先に出す。名前と時間帯を毎回
+ * 打ち直させる意味がない。無ければ白紙から作る。
+ */
+function openTaskPicker(ctx: Ctx): void {
+  const existing = new Set(ctx.db.tasks.map((t) => t.taskId));
+  const missing = defaultTasks(ctx.db.settings.careJobs).filter((t) => !existing.has(t.taskId));
+
+  const blank: Task = {
+    taskId: newId('task'),
+    name: '',
+    slot: SLOT_ORDER[0] as Task['slot'],
+    difficulty: DEFAULT_DIFFICULTY,
+    headcount: 1,
+    minHeadcount: 1,
+    allowSameSlot: false,
+    avoidWith: [],
+    eligibleJob: [...ctx.db.settings.careJobs],
+    preferOrder: [],
+    exclusiveGroup: '',
+    appliesTo: 'all',
+    active: true,
+    note: '',
+  };
+
+  const close = openSheet({
+    title: '業務を追加する',
+    lead: missing.length > 0
+      ? '標準の業務でまだ入っていないものです。'
+      : '標準の業務はすべて入っています。',
+    body: el('div', {},
+      ...missing.map((task) =>
+        el('button', {
+          class: 'row',
+          type: 'button',
+          style: 'text-align:left;cursor:pointer;width:100%',
+          onclick: () => {
+            ctx.update((db) => ({ ...db, tasks: [...db.tasks, task] }));
+            close();
+            toast(`${task.name} を追加しました。`);
+          },
+        },
+          el('div', { class: 'row__main' },
+            el('span', { class: 'row__title', text: task.name }),
+            el('span', { class: 'row__note',
+              text: `${SLOT_LABELS[task.slot]} / ${task.headcount}人 / ${labelOf(task.difficulty)}` })),
+          el('span', { class: 'pill', text: '追加' }))),
+      el('div', { class: 'actions' },
+        el('button', {
+          class: 'btn btn--primary',
+          type: 'button',
+          text: '白紙から作る',
+          onclick: () => {
+            close();
+            openTaskEditor(blank, ctx, true);
           },
         }),
         el('button', { class: 'btn btn--quiet', type: 'button', text: 'やめる', onclick: () => close() }))),

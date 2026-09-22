@@ -34,8 +34,11 @@ export function staff(staffId: string, name: string, job: string): Staff {
 export function task(overrides: Partial<Task> & { taskId: string; name: string }): Task {
   return {
     slot: SLOT.AM,
-    weight: 1,
+    difficulty: 2,
     headcount: 1,
+    minHeadcount: 1,
+    allowSameSlot: false,
+    avoidWith: [],
     eligibleJob: [],
     preferOrder: [],
     exclusiveGroup: '',

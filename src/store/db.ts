@@ -9,11 +9,16 @@
  * 壊れかけの状態が残らない。
  */
 
+import { DEFAULT_DIFFICULTY, difficultyFromWeight, isDifficultyLevel } from '../core/difficulty';
+import { defaultTasks } from '../core/masters';
 import { PRESENCE, readShiftCode } from '../core/shiftCode';
 import type { StaffSkills } from '../core/skills';
 import type { LearnedRule, ShiftType, Staff, Task } from '../core/types';
 
 const STORAGE_KEY = 'shift-allocator:v2';
+
+/** 組み込みの業務。古い保存データに足りない項目をここから補う。 */
+const BUILT_IN_TASKS = defaultTasks(['介護職員', '管理者', 'アシスタントスタッフ']);
 
 /** 履歴の保持上限。端末の保存容量を使い切らないため。 */
 const KEEP_RUNS_PER_PERIOD = 8;
@@ -135,6 +140,37 @@ function normalizeShiftType(type: ShiftType): ShiftType {
 }
 
 /**
+ * 業務に、あとから足した項目を補う。
+ *
+ * 古い保存データは難易度も下限人数も持たない。組み込みの業務は標準の値から
+ * 埋め、それ以外は安全側（減らさない・掛け持ちしない）に倒す。
+ */
+function normalizeTask(task: Task): Task {
+  const builtIn = BUILT_IN_TASKS.find((t) => t.taskId === task.taskId);
+  const headcount = Math.max(1, Number(task.headcount) || 1);
+  const withWeight = task as Task & { weight?: unknown };
+
+  return {
+    ...task,
+    headcount,
+    difficulty: isDifficultyLevel(task.difficulty)
+      ? task.difficulty
+      : withWeight.weight !== undefined
+        ? difficultyFromWeight(withWeight.weight)
+        : builtIn?.difficulty ?? DEFAULT_DIFFICULTY,
+    minHeadcount: typeof task.minHeadcount === 'number'
+      ? Math.min(headcount, Math.max(1, task.minHeadcount))
+      : Math.min(headcount, builtIn?.minHeadcount ?? headcount),
+    allowSameSlot: typeof task.allowSameSlot === 'boolean'
+      ? task.allowSameSlot
+      : builtIn?.allowSameSlot ?? false,
+    avoidWith: Array.isArray(task.avoidWith) ? task.avoidWith : builtIn?.avoidWith ?? [],
+    preferOrder: Array.isArray(task.preferOrder) ? task.preferOrder : builtIn?.preferOrder ?? [],
+    eligibleJob: Array.isArray(task.eligibleJob) ? task.eligibleJob : [],
+  };
+}
+
+/**
  * 割り当てに「何人目の枠か」を補う。
  * 古い保存データには無く、これが無いと同じ業務の枠を区別できない。
  */
@@ -161,7 +197,7 @@ function normalize(raw: unknown): Database {
     version: 2,
     staff: list<Staff>(value.staff),
     aliases: list<Alias>(value.aliases),
-    tasks: list<Task>(value.tasks).map((t) => ({ ...t, preferOrder: t.preferOrder ?? [] })),
+    tasks: list<Task>(value.tasks).map(normalizeTask),
     shiftTypes: list<ShiftType>(value.shiftTypes).map(normalizeShiftType),
     skills: list<StaffSkills>(value.skills),
     confirmed: list<ConfirmedShift>(value.confirmed),

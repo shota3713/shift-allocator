@@ -10,14 +10,18 @@
  */
 
 import { taskAppliesTo } from './assign';
+import { maxMatching } from './feasibility';
+import { difficultyFromWeight, isDifficultyLevel, weightOf } from './difficulty';
 import { buildCapableMap } from './skills';
 import { PRESENCE, SHIFT_KIND, readShiftCode, type Presence, type ShiftKind } from './shiftCode';
 import {
   SLOT,
+  SLOT_ORDER,
   WEEKDAY_KEYS,
   type DayPresence,
   type LearnedRule,
   type Plan,
+  type Slot,
   type SlotRequest,
   type Task,
   type WeekdayKey,
@@ -67,6 +71,83 @@ function meaningFor(code: string, known: ReadonlyMap<string, CodeMeaning>): Code
   if (hit) return hit;
   const parsed = readShiftCode(code);
   return { am: parsed.am, pm: parsed.pm, kind: parsed.kind, amOnly: parsed.amOnly };
+}
+
+/** その日その時間帯に現場にいる人。 */
+function presentStaff(
+  working: readonly string[],
+  day: number,
+  slotName: Slot,
+  presence: ReadonlyMap<string, ReadonlyMap<number, DayPresence>>,
+): string[] {
+  return working.filter((staffId) => {
+    const here = presence.get(staffId)?.get(day);
+    if (!here) return false;
+    return slotName === 'AM' ? here.am : slotName === 'PM' ? here.pm : here.noon;
+  });
+}
+
+/**
+ * その人数構成で、実際にいくつの枠が埋まるか。
+ *
+ * 人数の足し算では測れない。午前に6人いても、うち2人が看護職員で
+ * 看護師枠（1つ）しか担当できないなら、実際に埋まるのは5枠になる。
+ * 掛け持ちを許した業務（体操）は人を独占しないので、ここでは数えない。
+ */
+function fillable(
+  need: ReadonlyMap<string, number>,
+  inSlot: readonly Task[],
+  here: readonly string[],
+  capable: ReadonlyMap<string, ReadonlySet<string>>,
+): { matched: number; slots: number } {
+  const candidates: string[][] = [];
+  for (const task of inSlot) {
+    if (task.allowSameSlot) continue;
+    const able = here.filter((staffId) => capable.get(task.taskId)?.has(staffId));
+    for (let i = 0; i < (need.get(task.taskId) ?? 0); i += 1) candidates.push(able);
+  }
+  return { matched: maxMatching(candidates), slots: candidates.length };
+}
+
+/**
+ * 人が足りない日の人数を決める。
+ *
+ * 埋まらない枠を並べても意味がない。減らしてよい業務（minHeadcount）から、
+ * 「消しても埋まる枠の数が変わらない」枠だけを落とす。埋まるはずの枠を
+ * 消してしまわないための条件で、これがないと人を遊ばせることになる。
+ *
+ * 例）午前に入れる人が5人の日は、リハ担当を2人から1人に落として
+ * 風呂3・リハ1・看護1 の5枠にする。
+ */
+function fitHeadcounts(
+  inSlot: readonly Task[],
+  here: readonly string[],
+  capable: ReadonlyMap<string, ReadonlySet<string>>,
+): Map<string, number> {
+  const need = new Map(inSlot.map((task) => [task.taskId, task.headcount]));
+
+  const shrinkable = [...inSlot]
+    .filter((task) => task.minHeadcount < task.headcount && !task.allowSameSlot)
+    .sort((a, b) => (a.difficulty !== b.difficulty
+      ? a.difficulty - b.difficulty
+      : a.taskId < b.taskId ? -1 : 1));
+  if (shrinkable.length === 0) return need;
+
+  for (;;) {
+    const current = fillable(need, inSlot, here, capable);
+    if (current.slots <= current.matched) break;
+
+    const target = shrinkable.find((task) => {
+      if ((need.get(task.taskId) ?? 0) <= task.minHeadcount) return false;
+      const trial = new Map(need);
+      trial.set(task.taskId, (trial.get(task.taskId) as number) - 1);
+      return fillable(trial, inSlot, here, capable).matched === current.matched;
+    });
+    if (!target) break;
+
+    need.set(target.taskId, (need.get(target.taskId) as number) - 1);
+  }
+  return need;
 }
 
 /**
@@ -126,9 +207,15 @@ export function buildPlan(db: Database, periodKey: string): Plan {
     .map((t) => ({
       ...t,
       slot: (String(t.slot).toUpperCase() as Task['slot']) || SLOT.AM,
-      weight: Number(t.weight) || 1,
+      difficulty: isDifficultyLevel(t.difficulty) ? t.difficulty : difficultyFromWeight(t.difficulty),
       headcount: Math.max(1, Number(t.headcount) || 1),
+      minHeadcount: Math.min(
+        Math.max(1, Number(t.headcount) || 1),
+        Math.max(1, Number(t.minHeadcount) || Number(t.headcount) || 1),
+      ),
       preferOrder: t.preferOrder ?? [],
+      avoidWith: t.avoidWith ?? [],
+      allowSameSlot: t.allowSameSlot === true,
     }));
   const tasksById = new Map(tasks.map((t) => [t.taskId, t]));
   const staffIds = [...workingByStaff.keys()].sort();
@@ -150,10 +237,27 @@ export function buildPlan(db: Database, periodKey: string): Plan {
   const slots: SlotRequest[] = [];
   for (const day of [...workingByDay.keys()].sort((a, b) => a - b)) {
     const weekday = weekdayOf(year, month, day);
-    for (const task of tasks) {
-      if (!taskAppliesTo(task.appliesTo, weekday)) continue;
-      for (let i = 0; i < task.headcount; i += 1) {
-        slots.push({ day, weekday, taskId: task.taskId, slot: task.slot, index: i, weight: task.weight });
+    const today = tasks.filter((task) => taskAppliesTo(task.appliesTo, weekday));
+
+    for (const slotName of SLOT_ORDER) {
+      const inSlot = today.filter((task) => task.slot === slotName);
+      if (inSlot.length === 0) continue;
+
+      const here = presentStaff(workingByDay.get(day) ?? [], day, slotName, presence);
+      const headcounts = fitHeadcounts(inSlot, here, capable);
+
+      for (const task of inSlot) {
+        const need = headcounts.get(task.taskId) ?? task.headcount;
+        for (let i = 0; i < need; i += 1) {
+          slots.push({
+            day,
+            weekday,
+            taskId: task.taskId,
+            slot: task.slot,
+            index: i,
+            weight: weightOf(task.difficulty),
+          });
+        }
       }
     }
   }

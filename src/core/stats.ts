@@ -9,6 +9,7 @@
  */
 
 import { isEligible } from './assign';
+import { weightOf } from './difficulty';
 import type { Assignment, Plan } from './types';
 
 export interface StaffStat {
@@ -64,7 +65,8 @@ export function buildStats(assignments: readonly Assignment[], plan: Plan): Stat
     const entry = byStaff.get(a.staffId);
     if (!entry) continue;
     entry.total += 1;
-    entry.weighted += plan.tasksById.get(a.taskId)?.weight ?? 1;
+    const task = plan.tasksById.get(a.taskId);
+    entry.weighted += task ? weightOf(task.difficulty) : 1;
     entry.byTask.set(a.taskId, (entry.byTask.get(a.taskId) ?? 0) + 1);
   }
 

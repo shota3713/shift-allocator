@@ -17,6 +17,7 @@
  * これがないと「修正を学習した効果」を検証できない。
  */
 
+import { weightOf } from './difficulty';
 import {
   RULE_TYPE,
   type Assignment,
@@ -85,7 +86,9 @@ export function taskAppliesTo(appliesTo: string, weekday: WeekdayKey): boolean {
 
 /**
  * その日の他の割り当てとぶつかるか。
- * 同一時間帯の掛け持ちと、exclusiveGroup の重複を禁じる。
+ *
+ * 原則は「同じ時間帯に1人が持てる業務は1つ」。体操のように短く済む業務だけ
+ * allowSameSlot で例外にし、それでも組ませたくない相手は avoidWith に書く。
  */
 function hasConflict(
   staffId: string,
@@ -105,8 +108,29 @@ function hasConflict(
     const otherTask = plan.tasksById.get(other.taskId);
     if (!otherTask) continue;
 
-    if (otherTask.slot === task.slot) return true;
+    if (other.taskId === slot.taskId) return true;
+    if (task.avoidWith.includes(otherTask.taskId)) return true;
+    if (otherTask.avoidWith.includes(task.taskId)) return true;
     if (task.exclusiveGroup && otherTask.exclusiveGroup === task.exclusiveGroup) return true;
+    if (otherTask.slot === task.slot && !task.allowSameSlot && !otherTask.allowSameSlot) return true;
+  }
+  return false;
+}
+
+/** その人がその日その時間帯に、もう何か持っているか。掛け持ちの判定に使う。 */
+export function isBusyInSlot(
+  staffId: string,
+  day: number,
+  slot: Slot,
+  assignments: readonly Assignment[],
+  plan: Plan,
+  excludeIndex: number,
+): boolean {
+  for (let k = 0; k < assignments.length; k += 1) {
+    if (k === excludeIndex) continue;
+    const other = assignments[k];
+    if (!other || other.staffId !== staffId || other.day !== day) continue;
+    if (plan.tasksById.get(other.taskId)?.slot === slot) return true;
   }
   return false;
 }
@@ -248,7 +272,7 @@ export function totalCost(
     const entry = a.staffId ? load.get(a.staffId) : undefined;
     if (!entry) continue;
     const task = plan.tasksById.get(a.taskId);
-    entry.total += task ? task.weight : 1;
+    entry.total += task ? weightOf(task.difficulty) : 1;
     entry.byTask.set(a.taskId, (entry.byTask.get(a.taskId) ?? 0) + 1);
     rulePart += rulePenalty(a.staffId, { taskId: a.taskId, weekday: a.weekday }, plan.rules);
     if (task) preferencePart += preferenceTier(a.staffId, task, a.day, plan);
@@ -268,15 +292,29 @@ export function totalCost(
     const rates = eligible.map(
       (id) => ((load.get(id) as Load).byTask.get(task.taskId) ?? 0) / workdaysOf(plan, id),
     );
-    taskVariance += variance(rates) * task.weight;
+    taskVariance += variance(rates) * weightOf(task.difficulty);
   }
 
   // 未割り当ての枠は強く嫌う。
   const unfilled = assignments.filter((a) => !a.staffId).length;
 
+  // 掛け持ちも数える。局所改善が「分散が下がるから」と掛け持ちを
+  // 増やしてしまうのを止めるため。
+  const seen = new Set<string>();
+  let doubled = 0;
+  for (const a of assignments) {
+    if (!a.staffId) continue;
+    const taskSlot = plan.tasksById.get(a.taskId)?.slot;
+    if (!taskSlot) continue;
+    const key = `${a.staffId}#${a.day}#${taskSlot}`;
+    if (seen.has(key)) doubled += 1;
+    else seen.add(key);
+  }
+
   return settings.weightFairnessTotal * variance(normalized)
     + settings.weightFairnessTask * taskVariance
     + settings.weightPreference * preferencePart
+    + settings.weightPreference * doubled
     + settings.weightLearnedRule * rulePart
     + unfilled * 1000;
 }
@@ -302,9 +340,16 @@ function greedyAssign(plan: Plan, settings: AssignSettings, seed: number): Assig
     // いなければ遅番」という決め方は、上の順位の人がいる限り下へ降りない。
     // 公平さは同じ順位の中だけで効かせる。
     const task = plan.tasksById.get(slot.taskId);
-    const candidates = task
-      ? bestTierOnly(allowed, task, slot.day, plan)
-      : allowed;
+    let candidates = task ? bestTierOnly(allowed, task, slot.day, plan) : allowed;
+
+    // 掛け持ちを許した業務（体操）は、空いている人がいる限りその人に回す。
+    // 掛け持ちは最後の手段で、公平さの都合で先に選ばれてはいけない。
+    if (task?.allowSameSlot) {
+      const free = candidates.filter(
+        (staffId) => !isBusyInSlot(staffId, slot.day, task.slot, result, plan, here),
+      );
+      if (free.length > 0) candidates = free;
+    }
 
     let bestStaff = '';
     let bestScore = Number.POSITIVE_INFINITY;

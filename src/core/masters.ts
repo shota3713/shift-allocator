@@ -6,6 +6,7 @@
  */
 
 import { normalizeName, normalizeText } from './resolve';
+import type { DifficultyLevel } from './difficulty';
 import { PRESENCE, readShiftCode, type Presence } from './shiftCode';
 import { SLOT, type ShiftType, type Staff, type Task } from './types';
 import type { ParsedShift } from '../pdf/types';
@@ -28,16 +29,26 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     taskId: string,
     name: string,
     slot: Task['slot'],
-    weight: number,
+    difficulty: DifficultyLevel,
     headcount: number,
     eligibleJob: readonly string[],
-    options: { exclusiveGroup?: string; preferOrder?: readonly string[]; note?: string } = {},
+    options: {
+      exclusiveGroup?: string;
+      preferOrder?: readonly string[];
+      minHeadcount?: number;
+      allowSameSlot?: boolean;
+      avoidWith?: readonly string[];
+      note?: string;
+    } = {},
   ): Task => ({
     taskId,
     name,
     slot,
-    weight,
+    difficulty,
     headcount,
+    minHeadcount: options.minHeadcount ?? headcount,
+    allowSameSlot: options.allowSameSlot ?? false,
+    avoidWith: [...(options.avoidWith ?? [])],
     eligibleJob: [...eligibleJob],
     preferOrder: [...(options.preferOrder ?? [])],
     exclusiveGroup: options.exclusiveGroup ?? '',
@@ -47,22 +58,34 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
   });
 
   return [
-    row('REHA_AM', 'リハ担当', SLOT.AM, 1.5, 2, care),
-    row('NURSE_AM', '看護師', SLOT.AM, 1.0, 1, [nurse]),
-    row('BATH', '入浴担当', SLOT.AM, 1.5, 2, care),
-    row('BATH_LEAD', '入浴リーダー', SLOT.AM, 2.0, 1, care, { exclusiveGroup: lead }),
+    // 午前は 風呂3（リーダー1＋2）・リハ2・看護1 の計6人。
+    // 5人しかいない日はリハを1人に落として 風呂3・リハ1・看護1 にする。
+    row('REHA_AM', 'リハ担当', SLOT.AM, 3, 2, care, {
+      minHeadcount: 1,
+      note: '午前に5人しかいない日は1人に減らします',
+    }),
+    row('NURSE_AM', '看護師', SLOT.AM, 2, 1, [nurse]),
+    row('BATH', '入浴担当', SLOT.AM, 3, 2, care),
+    row('BATH_LEAD', '入浴リーダー', SLOT.AM, 4, 1, care, { exclusiveGroup: lead }),
     // 昼は看護師と午前だけの人が基本。いなければ遅番が入る。
-    row('NOON', '昼担当', SLOT.NOON, 1.0, 3, careAndNurse, {
+    row('NOON', '昼担当', SLOT.NOON, 2, 3, careAndNurse, {
       preferOrder: [`job:${nurse}`, 'amOnly', 'kind:LATE'],
       note: '看護師 → 午前だけの人 → 遅番 の順で当てます',
     }),
-    row('RENRAKU', '連絡帳', SLOT.PM, 1.5, 1, careAndNurse, {
+    row('RENRAKU', '連絡帳', SLOT.PM, 3, 1, careAndNurse, {
       exclusiveGroup: lead,
       note: '書ける人を「担当できる人」で絞ってください',
     }),
-    row('REC_LEAD', 'レクリーダー', SLOT.PM, 2.0, 1, care, { exclusiveGroup: lead }),
-    row('TAISO', '体操', SLOT.PM, 1.0, 1, care),
-    row('REHA_PM', 'PMリハ', SLOT.PM, 1.5, 1, care),
+    row('REC_LEAD', 'レクリーダー', SLOT.PM, 4, 1, care, { exclusiveGroup: lead }),
+    // 体操は短いので、午後に空いている人がいなければ掛け持ちにする。
+    // ただし連絡帳とレクリーダーの人には乗せない。
+    row('TAISO', '体操', SLOT.PM, 2, 1, care, {
+      allowSameSlot: true,
+      avoidWith: ['RENRAKU', 'REC_LEAD'],
+      note: '空いている人が優先。いなければ連絡帳・レク以外の人が兼任します',
+    }),
+    row('REHA_PM', 'PMリハ', SLOT.PM, 3, 1, care),
+    row('HANDWORK', '手作業', SLOT.PM, 2, 2, care),
   ];
 }
 
