@@ -140,6 +140,26 @@ export function setTaskMembers(
 }
 
 /**
+ * ある業務について選んだ内容を、全員ぶん取り消す。
+ * 職種の初期値に戻るので、担当できる人が1人もいない状態から抜け出せる。
+ */
+export function clearTaskDecisions(
+  skills: readonly StaffSkills[],
+  taskId: string,
+): StaffSkills[] {
+  let next: StaffSkills[] = [];
+  for (const row of skills) {
+    next = upsert(
+      next,
+      row.staffId,
+      row.taskIds.filter((id) => id !== taskId),
+      row.excluded.filter((id) => id !== taskId),
+    );
+  }
+  return next;
+}
+
+/**
  * 古い形（できる業務の一覧だけ）を、できる／できないの形に直す。
  *
  * 一覧だけの形は「ここに無い業務は担当しない」という意味になっていたので、

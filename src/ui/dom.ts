@@ -104,3 +104,10 @@ export function toast(message: string, tone: 'settled' | 'blocked' = 'settled'):
   document.body.appendChild(node);
   setTimeout(() => node.remove(), 3200);
 }
+
+declare const __BUILD__: string;
+
+/** ビルドの版。どの版が動いているかを画面の隅で確かめられるようにする。 */
+export function buildId(): string {
+  return typeof __BUILD__ === 'string' ? __BUILD__ : 'dev';
+}

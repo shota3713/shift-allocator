@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCapableMap,
   canDo,
+  clearTaskDecisions,
   isConfigured,
   migrateSkills,
   setSkills,
@@ -144,5 +145,32 @@ describe('古い保存データの読み直し', () => {
   it('新しい形はそのまま読む', () => {
     const current: StaffSkills[] = [{ staffId: 'a', taskIds: ['BATH'], excluded: ['REC'] }];
     expect(migrateSkills(current, TASKS)).toEqual(current);
+  });
+});
+
+describe('担当できる人が0人になったとき', () => {
+  it('その業務の選択を取り消すと、職種の初期値に戻る', () => {
+    const poisoned: StaffSkills[] = TEAM.map((s) => ({
+      staffId: s.staffId,
+      taskIds: ['BATH'],
+      excluded: ['HANDWORK'],
+    }));
+    const before = buildCapableMap(
+      TEAM.map((s) => ({ staffId: s.staffId, job: s.job })),
+      [...TASKS, NEW_TASK],
+      poisoned,
+    );
+    expect(before.get('HANDWORK')?.size).toBe(0);
+
+    const repaired = clearTaskDecisions(poisoned, 'HANDWORK');
+    const after = buildCapableMap(
+      TEAM.map((s) => ({ staffId: s.staffId, job: s.job })),
+      [...TASKS, NEW_TASK],
+      repaired,
+    );
+    expect(after.get('HANDWORK')?.size).toBe(2);
+    // 他の業務の設定は触らない（入浴は3人とも選ばれたまま）
+    expect(before.get('BATH')?.size).toBe(3);
+    expect(after.get('BATH')?.size).toBe(3);
   });
 });

@@ -21,6 +21,7 @@ import {
   type SlotKey,
 } from '../../core/learn';
 import { defaultTasks } from '../../core/masters';
+import { clearTaskDecisions } from '../../core/skills';
 import { newId, nowIso, type Run } from '../../store/db';
 import { SLOT_LABELS, SLOT_ORDER, WEEKDAY_LABELS, type Assignment, type Plan } from '../../core/types';
 
@@ -59,6 +60,8 @@ export function renderAssign(root: HTMLElement, ctx: Ctx): void {
     return;
   }
 
+  renderCapabilityGaps(root, ctx, plan);
+
   const runs = db.runs.filter((r) => r.period === period)
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   const active = runs.find((r) => r.runId === ctx.state.runId) ?? runs[0];
@@ -69,6 +72,40 @@ export function renderAssign(root: HTMLElement, ctx: Ctx): void {
   }
 
   renderResult(root, ctx, plan, active, runs);
+}
+
+/**
+ * 担当できる人が1人もいない業務を、いちばん上で名指しする。
+ *
+ * この状態の業務は何度割り振っても空欄のまま出てくる。原因は設定の奥に
+ * あるので、結果の画面から1回で直せるようにしておく。職種の初期値に戻すのは、
+ * ドライバーまで巻き込む「全員にする」より安全なため。
+ */
+function renderCapabilityGaps(root: HTMLElement, ctx: Ctx, plan: Plan): void {
+  const gaps = plan.tasks.filter((task) => (plan.capable.get(task.taskId)?.size ?? 0) === 0);
+  if (gaps.length === 0) return;
+
+  root.append(
+    el('div', { class: 'notice notice--blocked' },
+      el('strong', { text: `${gaps.map((t) => t.name).join('・')} を担当できる人が1人もいません。` }),
+      el('span', { text: 'この業務は何度割り振っても空欄のままになります。' })),
+    el('div', { class: 'actions', style: 'margin-bottom:var(--step-4)' },
+      ...gaps.map((task) => el('button', {
+        class: 'btn btn--primary',
+        type: 'button',
+        text: `${task.name} を職種の初期値に戻す`,
+        onclick: () => {
+          ctx.update((db) => ({ ...db, skills: clearTaskDecisions(db.skills, task.taskId) }));
+          toast(`${task.name} の担当を職種から決め直しました。割り振り直してください。`);
+        },
+      })),
+      el('button', {
+        class: 'btn btn--quiet',
+        type: 'button',
+        text: '設定で選ぶ',
+        onclick: () => ctx.go('settings'),
+      })),
+  );
 }
 
 /* ── 実行前 ────────────────────────────────── */

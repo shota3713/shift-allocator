@@ -7,7 +7,7 @@
  */
 
 import type { Ctx } from '../app';
-import { el, openSheet, toast } from '../dom';
+import { buildId, el, openSheet, toast } from '../dom';
 import { DEFAULT_DIFFICULTY, DIFFICULTY_LEVELS, labelOf } from '../../core/difficulty';
 import { describeRules } from '../../core/learn';
 import { defaultTasks } from '../../core/masters';
@@ -120,7 +120,7 @@ export function renderSettings(root: HTMLElement, ctx: Ctx): void {
         }))),
   );
 
-  root.append(el('p', { class: 'footnote', text: 'シフト振り分け v2' }));
+  root.append(el('p', { class: 'footnote', text: `シフト振り分け v2 / 版 ${buildId()}` }));
 }
 
 function renderTaskRow(task: Task, ctx: Ctx): HTMLElement {
