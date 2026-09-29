@@ -12,7 +12,7 @@ import { buildPlan } from '../src/core/plan';
 import { DIFFICULTY_LEVELS, difficultyFromWeight, weightOf } from '../src/core/difficulty';
 import { defaultTasks } from '../src/core/masters';
 import { DEFAULT_SEED, DEFAULT_SETTINGS, SLOT } from '../src/core/types';
-import { EARLY, databaseWith, staff, task } from './helpers';
+import { AM_ONLY, EARLY, databaseWith, staff, task } from './helpers';
 
 const CARE_JOBS = ['介護職員', '管理者', 'アシスタントスタッフ'];
 const DAYS = [1, 2, 3];
@@ -141,8 +141,8 @@ describe('手作業', () => {
 describe('昼担当の優先順', () => {
   const NOON = defaultTasks(CARE_JOBS).filter((t) => t.taskId === 'NOON');
 
-  it('看護師 → 早番 → 午前だけ → 遅番 の順', () => {
-    expect(NOON[0]?.preferOrder).toEqual(['job:看護職員', 'kind:EARLY', 'amOnly', 'kind:LATE']);
+  it('看護師 → 午前だけ → 遅番 → 早番 の順', () => {
+    expect(NOON[0]?.preferOrder).toEqual(['job:看護職員', 'amOnly', 'kind:LATE', 'kind:EARLY']);
   });
 
   it('看護師がいれば看護師に回る', () => {
@@ -163,7 +163,35 @@ describe('昼担当の優先順', () => {
     expect(result.assignments.every((a) => a.staffId === 'n')).toBe(true);
   });
 
-  it('看護師が出払ったら早番に回る', () => {
+  it('看護師の次は、早番より午前だけの人に回る', () => {
+    // 看護師1人・早番1人・午前だけ1人・日勤3人。昼は2人にする。
+    const team = [
+      staff('n', '星野', '看護職員'),
+      staff('e', '早川', '介護職員'),
+      staff('a', '朝倉', '介護職員'),
+      ...Array.from({ length: 3 }, (_, i) => staff(`c${i}`, `介護${i}`, '介護職員')),
+    ];
+    const plan = buildPlan(
+      databaseWith({
+        period: '2026-09',
+        staff: team,
+        tasks: NOON.map((t) => ({ ...t, headcount: 2, minHeadcount: 2 })),
+        days: DAYS,
+        codes: {
+          e: Object.fromEntries(DAYS.map((d) => [d, EARLY.code])),
+          a: Object.fromEntries(DAYS.map((d) => [d, AM_ONLY.code])),
+        },
+      }),
+      '2026-09',
+    );
+    const result = runAssignment(plan, DEFAULT_SETTINGS, DEFAULT_SEED);
+    const day1 = result.assignments.filter((a) => a.day === 1).map((a) => a.staffId);
+    expect(day1).toContain('n');
+    expect(day1).toContain('a');
+    expect(day1).not.toContain('e');
+  });
+
+  it('看護師・午前だけ・遅番が出払ったら早番に回る', () => {
     // 看護師1人・早番1人・日勤4人。昼は3人必要。
     const team = [
       staff('n', '星野', '看護職員'),
