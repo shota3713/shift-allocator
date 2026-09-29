@@ -13,8 +13,9 @@ import { renderImport } from './views/import';
 import { renderReview } from './views/review';
 import { renderAssign } from './views/assign';
 import { renderSettings } from './views/settings';
+import { renderWeekly } from './views/weekly';
 
-export type ViewName = 'home' | 'import' | 'review' | 'assign' | 'settings';
+export type ViewName = 'home' | 'import' | 'review' | 'assign' | 'weekly' | 'settings';
 
 export interface AppState {
   view: ViewName;
@@ -41,6 +42,7 @@ const TITLES: Record<ViewName, string> = {
   import: '勤務表を読み込む',
   review: '読み取りの確認',
   assign: '業務の割り振り',
+  weekly: '週ごとの表',
   settings: '設定',
 };
 
@@ -87,7 +89,7 @@ export function startApp(root: HTMLElement): void {
     clear(root);
     root.removeAttribute('aria-busy');
 
-    const body = el('main', { class: state.view === 'review' ? 'view view--wide' : 'view' });
+    const body = el('main', { class: state.view === 'review' || state.view === 'weekly' ? 'view view--wide' : 'view' });
 
     const shell = el(
       'div',
@@ -130,6 +132,7 @@ export function startApp(root: HTMLElement): void {
       case 'import': renderImport(body, ctx); break;
       case 'review': renderReview(body, ctx); break;
       case 'assign': renderAssign(body, ctx); break;
+      case 'weekly': renderWeekly(body, ctx); break;
       case 'settings': renderSettings(body, ctx); break;
     }
 

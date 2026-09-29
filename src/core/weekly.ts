@@ -40,6 +40,8 @@ export interface WeekRow {
 export interface WeekSheet {
   readonly columns: readonly WeekColumn[];
   readonly rows: readonly WeekRow[];
+  /** 列ごとの備考。月の外は null、書いていない日は空文字。 */
+  readonly notes: readonly (string | null)[];
 }
 
 export function daysInMonth(year: number, month: number): number {
@@ -72,7 +74,11 @@ function orderedTaskIds(plan: Plan, assignments: readonly WeeklyAssignment[]): s
     .map((entry) => entry.id);
 }
 
-export function buildWeeklySheets(plan: Plan, assignments: readonly WeeklyAssignment[]): WeekSheet[] {
+export function buildWeeklySheets(
+  plan: Plan,
+  assignments: readonly WeeklyAssignment[],
+  notes: ReadonlyMap<number, string> = new Map(),
+): WeekSheet[] {
   const byCell = new Map<string, WeeklyAssignment[]>();
   for (const a of assignments) {
     const key = `${a.taskId}#${a.day}`;
@@ -99,5 +105,6 @@ export function buildWeeklySheets(plan: Plan, assignments: readonly WeeklyAssign
         }),
       };
     }),
+    notes: columns.map((column) => (column.day === null ? null : notes.get(column.day) ?? '')),
   }));
 }

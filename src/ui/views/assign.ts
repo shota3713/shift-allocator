@@ -7,7 +7,6 @@
 
 import type { Ctx } from '../app';
 import { el, openSheet, toast } from '../dom';
-import { printWeekly } from '../printWeekly';
 import { runAssignment } from '../../core/assign';
 import { diagnoseFeasibility } from '../../core/feasibility';
 import { buildPlan, weekdayOf } from '../../core/plan';
@@ -277,8 +276,8 @@ function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: r
       el('button', {
         class: 'btn btn--primary btn--block',
         type: 'button',
-        text: '週ごとの表をPDFで保存',
-        onclick: () => printWeekly(plan, run.assignments),
+        text: '週ごとの表を見る（PDF保存）',
+        onclick: () => ctx.go('weekly', { runId: run.runId }),
       }),
       el('button', {
         class: 'btn btn--quiet btn--block',

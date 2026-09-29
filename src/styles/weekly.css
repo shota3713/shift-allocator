@@ -1,0 +1,114 @@
+/*
+ * 週ごとの表。画面で確かめて、そのまま A4横 1週1ページで印刷する。
+ * 画面では横に広いので、表だけ横にスクロールさせて業務の列を左に留める。
+ */
+
+.weekly-lead { color: var(--ink-soft); font-size: var(--text-small); margin-bottom: var(--step-4); }
+
+.weekly-sheet { margin-bottom: var(--step-6); }
+.weekly-sheet__head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--step-2);
+  margin-bottom: var(--step-3);
+}
+.weekly-sheet__title { font-size: var(--text-lead); }
+.weekly-sheet__range { color: var(--ink-soft); font-size: var(--text-small); }
+
+.weekly-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.weekly-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--text-small);
+  line-height: 1.4;
+}
+.weekly-table th,
+.weekly-table td {
+  border: 1px solid var(--line);
+  padding: var(--step-2);
+  vertical-align: top;
+  text-align: left;
+}
+.weekly-table thead th {
+  background: var(--surface-sunken);
+  text-align: center;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.weekly-table__task {
+  width: 8.5rem;
+  font-weight: 700;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+thead .weekly-table__task { background: var(--surface-sunken); }
+.weekly-table__slot { display: block; font-size: var(--text-micro); font-weight: 400; color: var(--ink-soft); }
+.weekly-table__day--sat { color: oklch(45% 0.12 255); }
+.weekly-table__day--sun { color: var(--blocked); }
+
+.weekly-table__none { background: var(--surface-sunken); }
+.weekly-table__name--empty { color: var(--blocked); font-weight: 700; }
+
+.weekly-table__notes > * { background: var(--accent-wash); }
+.weekly-table__notes .weekly-table__none { background: var(--surface-sunken); }
+.weekly-note { padding: var(--step-1) !important; }
+.weekly-note__input {
+  display: block;
+  width: 100%;
+  min-height: 3.2em;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  padding: var(--step-1) var(--step-2);
+  font-size: var(--text-small);
+  line-height: 1.4;
+}
+.weekly-note__input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+.weekly-note__print { display: none; }
+
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+
+  body { background: #fff; }
+  .topbar, .no-print { display: none !important; }
+  .view { max-width: none; padding: 0; margin: 0; }
+  .view--wide > * { padding-inline: 0; }
+
+  .weekly-sheet { break-after: page; margin: 0; color: #000; }
+  .weekly-sheet:last-of-type { break-after: auto; }
+  .weekly-sheet__title { font-size: 14pt; }
+  .weekly-sheet__range { font-size: 10pt; color: #000; }
+
+  .weekly-scroll { overflow: visible; border: 0; border-radius: 0; }
+  .weekly-table { min-width: 0; font-size: 10pt; line-height: 1.35; }
+  .weekly-table th,
+  .weekly-table td { border: 0.5pt solid #555; padding: 1.5mm 2mm; }
+  .weekly-table thead th { background: #eee; }
+  .weekly-table tr { break-inside: avoid; }
+  .weekly-table__task { position: static; width: 17%; background: #fff; }
+  thead .weekly-table__task { background: #eee; }
+  .weekly-table__slot { font-size: 8pt; color: #555; }
+  .weekly-table__none { background: #f2f2f2; }
+
+  .weekly-table__notes > * { background: #fff; }
+  .weekly-table__notes .weekly-table__none { background: #f2f2f2; }
+  .weekly-note { padding: 1.5mm 2mm !important; height: 16mm; }
+  .weekly-note__input { display: none; }
+  .weekly-note__print { display: block; white-space: pre-wrap; }
+
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

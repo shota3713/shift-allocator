@@ -345,7 +345,7 @@ function confirmWipe(ctx: Ctx): void {
         onclick: () => {
           ctx.update(() => ({
             version: 2, staff: [], aliases: [], tasks: [], shiftTypes: [], skills: [],
-            confirmed: [], runs: [], corrections: [], rules: [], settings: ctx.db.settings,
+            confirmed: [], runs: [], corrections: [], rules: [], dayNotes: [], settings: ctx.db.settings,
           }));
           close();
           ctx.go('home');

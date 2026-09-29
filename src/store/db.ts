@@ -71,6 +71,13 @@ export interface Correction {
   readonly createdAt: string;
 }
 
+/** 週ごとの表の備考。日ごとに1つ。空文字の行は残さない。 */
+export interface DayNote {
+  readonly period: string;
+  readonly day: number;
+  readonly text: string;
+}
+
 export interface AppSettings {
   /** 介助業務を担当できる職種。業務マスタの初期値に使う。 */
   readonly careJobs: readonly string[];
@@ -95,6 +102,7 @@ export interface Database {
   readonly runs: readonly Run[];
   readonly corrections: readonly Correction[];
   readonly rules: readonly LearnedRule[];
+  readonly dayNotes: readonly DayNote[];
   readonly settings: AppSettings;
 }
 
@@ -120,6 +128,7 @@ export function emptyDatabase(): Database {
     runs: [],
     corrections: [],
     rules: [],
+    dayNotes: [],
     settings: DEFAULT_APP_SETTINGS,
   };
 }
@@ -208,6 +217,8 @@ function normalize(raw: unknown): Database {
     runs: list<Run>(value.runs).map(normalizeRun),
     corrections: list<Correction>(value.corrections),
     rules: list<LearnedRule>(value.rules),
+    dayNotes: list<DayNote>(value.dayNotes)
+      .filter((n) => typeof n.text === 'string' && typeof n.day === 'number' && n.text !== ''),
     settings: { ...DEFAULT_APP_SETTINGS, ...(value.settings ?? {}) },
   };
 }
@@ -252,6 +263,18 @@ export function saveDatabase(db: Database): void {
       + `古い履歴を消してください。（${error instanceof Error ? error.message : String(error)}）`,
     );
   }
+}
+
+/** その月の備考を 日 → 本文 で引く。 */
+export function dayNotesFor(db: Database, period: string): ReadonlyMap<number, string> {
+  return new Map(db.dayNotes.filter((n) => n.period === period).map((n) => [n.day, n.text]));
+}
+
+/** 1日ぶんの備考を差し替える。空にしたら行ごと消す。 */
+export function setDayNote(db: Database, period: string, day: number, text: string): Database {
+  const rest = db.dayNotes.filter((n) => !(n.period === period && n.day === day));
+  const trimmed = text.trim();
+  return { ...db, dayNotes: trimmed ? [...rest, { period, day, text: trimmed }] : rest };
 }
 
 /** 読んで、変えて、書き戻す。UI からの更新はすべてここを通す。 */

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { buildWeeklySheets } from '../src/core/weekly';
+import { dayNotesFor, emptyDatabase, setDayNote } from '../src/store/db';
 import { SLOT } from '../src/core/types';
 import { planFor, staff, task } from './helpers';
 
@@ -50,5 +51,26 @@ describe('buildWeeklySheets', () => {
     expect(row?.cells[2]).toEqual(['']);
     expect(row?.cells[1]).toBeNull();
     expect(row?.cells[0]).toBeNull();
+  });
+
+  test('places day notes under their column and leaves out-of-month columns null', () => {
+    const sheets = buildWeeklySheets(plan(), [], new Map([[1, '敬老会'], [30, '避難訓練']]));
+
+    expect(sheets[0]?.notes).toEqual([null, '敬老会', '', '', '', '', '']);
+    expect(sheets[4]?.notes).toEqual(['', '', '避難訓練', null, null, null, null]);
+  });
+});
+
+describe('setDayNote', () => {
+  test('replaces the note for one day and removes it when cleared', () => {
+    const written = setDayNote(emptyDatabase(), period, 3, '  外出レク  ');
+    expect(dayNotesFor(written, period).get(3)).toBe('外出レク');
+    expect(dayNotesFor(written, '2026-10').size).toBe(0);
+
+    const replaced = setDayNote(written, period, 3, '雨天中止');
+    expect(replaced.dayNotes).toHaveLength(1);
+    expect(dayNotesFor(replaced, period).get(3)).toBe('雨天中止');
+
+    expect(setDayNote(replaced, period, 3, '   ').dayNotes).toHaveLength(0);
   });
 });
