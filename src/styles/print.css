@@ -1,0 +1,48 @@
+/*
+ * 週ごとの割り振り表の印刷。画面には出さない。
+ * 印刷のときだけ、アプリを隠してこの表だけを A4横 1週1ページで出す。
+ */
+
+.print-root { display: none; }
+
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+
+  body { background: #fff; }
+  body > *:not(.print-root) { display: none !important; }
+
+  .print-root { display: block; color: #000; font-size: 10pt; line-height: 1.35; }
+
+  .print-sheet { break-after: page; }
+  .print-sheet:last-child { break-after: auto; }
+
+  .print-sheet__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4mm;
+  }
+  .print-sheet__title { font-size: 14pt; }
+  .print-sheet__range { font-size: 10pt; }
+
+  .print-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  .print-table th,
+  .print-table td {
+    border: 0.5pt solid #555;
+    padding: 1.5mm 2mm;
+    vertical-align: top;
+    text-align: left;
+  }
+  .print-table thead th { background: #eee; text-align: center; font-weight: 700; }
+  .print-table tr { break-inside: avoid; }
+
+  .print-table__task { width: 17%; font-weight: 700; }
+  .print-table__slot { display: block; font-size: 8pt; font-weight: 400; color: #555; }
+  .print-table__day--sat { color: #1a4f9c; }
+  .print-table__day--sun { color: #a8261d; }
+
+  .print-table__none { background: #f2f2f2; }
+  .print-table__name--empty { color: #a8261d; font-weight: 700; }
+
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
