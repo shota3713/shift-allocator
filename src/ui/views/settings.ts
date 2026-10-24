@@ -322,7 +322,13 @@ function downloadBackup(db: Database): void {
   URL.revokeObjectURL(url);
 }
 
+const MAX_BACKUP_BYTES = 10 * 1024 * 1024;
+
 async function restoreBackup(file: File, ctx: Ctx): Promise<void> {
+  if (file.size > MAX_BACKUP_BYTES) {
+    toast('ファイルが大きすぎます（10MBまで）。', 'blocked');
+    return;
+  }
   try {
     const restored = importBackup(await file.text());
     saveDatabase(restored);

@@ -13,7 +13,12 @@ pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 /** PDF を読み、ページごとの文字と座標を返す。 */
 export async function readPdfText(file: ArrayBuffer): Promise<PageText[]> {
-  const doc = await pdfjs.getDocument({ data: new Uint8Array(file) }).promise;
+  // 外部から受け取る PDF なので、PDF 内のスクリプト評価と XFA フォームを無効にしておく
+  const doc = await pdfjs.getDocument({
+    data: new Uint8Array(file),
+    isEvalSupported: false,
+    enableXfa: false,
+  }).promise;
   try {
     const pages: PageText[] = [];
     for (let n = 1; n <= doc.numPages; n += 1) {
