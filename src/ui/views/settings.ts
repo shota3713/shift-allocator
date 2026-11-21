@@ -12,8 +12,8 @@ import { DEFAULT_DIFFICULTY, DIFFICULTY_LEVELS, labelOf } from '../../core/diffi
 import { describeRules } from '../../core/learn';
 import { defaultTasks } from '../../core/masters';
 import { taskIdsFor } from '../../core/skills';
-import { exportBackup, importBackup, newId, saveDatabase, type Database } from '../../store/db';
-import { SLOT_LABELS, SLOT_ORDER, type Task } from '../../core/types';
+import { emptyDatabase, exportBackup, importBackup, newId, saveDatabase, type Database } from '../../store/db';
+import { SLOT_LABELS, SLOT_ORDER, displayNameOf, isDerivedTask, type Task } from '../../core/types';
 import { renderCapability } from './capability';
 import { renderShiftTypes } from './shiftTypes';
 
@@ -123,13 +123,28 @@ export function renderSettings(root: HTMLElement, ctx: Ctx): void {
   root.append(el('p', { class: 'footnote', text: `シフト振り分け v2 / 版 ${buildId()}` }));
 }
 
+/** ほかの結果から決まる業務の説明。人数や担当できる人の代わりに出す。 */
+function deriveSummary(task: Task, ctx: Ctx): string {
+  if (task.derive === 'rest') return `${SLOT_LABELS[task.slot]} / 残りの人全員`;
+  if (task.derive === 'fixed') {
+    const person = ctx.db.staff.find((s) => s.staffId === task.fixedStaffId);
+    return `${SLOT_LABELS[task.slot]} / 担当 ${person ? displayNameOf(person) : '未設定'}`;
+  }
+  const source = ctx.db.tasks.find((t) => `follow:${t.taskId}` === task.derive);
+  return `${SLOT_LABELS[task.slot]} / ${source?.name ?? '元の業務'}の人`;
+}
+
 function renderTaskRow(task: Task, ctx: Ctx): HTMLElement {
   const db = ctx.db;
   const capable = db.staff.filter((s) =>
     taskIdsFor(s.staffId, s.job, db.tasks, db.skills).includes(task.taskId)).length;
+  const derived = isDerivedTask(task);
+  const short = derived
+    ? task.derive === 'fixed' && !task.fixedStaffId
+    : capable < task.headcount;
 
   return el('button', {
-    class: capable < task.headcount ? 'row row--caution' : 'row',
+    class: short ? 'row row--caution' : 'row',
     type: 'button',
     style: 'text-align:left;cursor:pointer',
     onclick: () => openTaskEditor(task, ctx),
@@ -137,7 +152,9 @@ function renderTaskRow(task: Task, ctx: Ctx): HTMLElement {
     el('div', { class: 'row__main' },
       el('span', { class: 'row__title', text: task.name }),
       el('span', { class: 'row__note',
-        text: `${SLOT_LABELS[task.slot]} / ${task.headcount}人必要 / 難易度 ${task.difficulty}（${labelOf(task.difficulty)}） / 担当できる人 ${capable}人` }),
+        text: derived
+          ? deriveSummary(task, ctx)
+          : `${SLOT_LABELS[task.slot]} / ${task.headcount}人必要 / 難易度 ${task.difficulty}（${labelOf(task.difficulty)}） / 担当できる人 ${capable}人` }),
       task.note ? el('span', { class: 'row__note', text: task.note }) : null),
     el('span', { class: task.active ? 'pill pill--settled' : 'pill', text: task.active ? '有効' : '停止' }));
 }
@@ -148,7 +165,7 @@ function openTaskEditor(task: Task, ctx: Ctx, isNew = false): void {
     el('option', { value: s, text: SLOT_LABELS[s], selected: task.slot === s })));
   const headcount = el('input', { type: 'number', min: '1', max: '20', value: String(task.headcount) });
   const minHeadcount = el('input', {
-    type: 'number', min: '1', max: '20', value: String(task.minHeadcount),
+    type: 'number', min: '0', max: '20', value: String(task.minHeadcount),
   });
   const difficulty = el('select', { 'aria-label': '難易度' },
     ...DIFFICULTY_LEVELS.map((level) =>
@@ -159,6 +176,16 @@ function openTaskEditor(task: Task, ctx: Ctx, isNew = false): void {
       })));
   const jobs = el('input', { type: 'text', value: task.eligibleJob.join('、') });
   const active = el('input', { type: 'checkbox', checked: task.active });
+  const derived = isDerivedTask(task);
+  // 夕方清掃のように決まった人が持つ業務は、担当の人をここで選ぶ。実名は端末の中だけに残る。
+  const fixedStaff = el('select', { 'aria-label': '担当の人' },
+    el('option', { value: '', text: '未設定', selected: !task.fixedStaffId }),
+    ...ctx.db.staff.filter((s) => s.active || s.staffId === task.fixedStaffId).map((s) =>
+      el('option', {
+        value: s.staffId,
+        text: s.displayName ? `${s.displayName}（${s.name}）` : s.name,
+        selected: s.staffId === task.fixedStaffId,
+      })));
 
   const close = openSheet({
     title: isNew ? '業務を追加する' : task.name,
@@ -166,12 +193,19 @@ function openTaskEditor(task: Task, ctx: Ctx, isNew = false): void {
     body: el('div', {},
       field('業務名', name),
       field('時間帯', slot),
-      field('必要人数', headcount),
-      field('人が足りない日の最低人数', minHeadcount,
-        '出られる人が少ない日は、ここまで人数を落として枠を立てます。減らしたくなければ必要人数と同じに。'),
-      field('難易度', difficulty, '5段階。高いほど、同じ人に続けて当たらないようにします。'),
-      field('職種の初期値', jobs, 'まだ選んでいない人をこの職種で判断します。「、」で区切ります。'),
-      task.preferOrder.length > 0 || task.allowSameSlot
+      derived
+        ? el('p', { class: 'field__hint', style: 'margin-bottom:var(--step-4)', text: task.note })
+        : null,
+      task.derive === 'fixed'
+        ? field('担当の人', fixedStaff, 'この人が出勤した日に、この業務に入ります。')
+        : null,
+      derived ? null : field('必要人数', headcount),
+      derived ? null : field('人が足りない日の最低人数', minHeadcount,
+        '出られる人が少ない日は、ここまで人数を落として枠を立てます。減らしたくなければ必要人数と同じに。'
+        + '0 にすると、ほかの業務が埋まって人が余った日だけ立てます。'),
+      derived ? null : field('難易度', difficulty, '5段階。高いほど、同じ人に続けて当たらないようにします。'),
+      derived ? null : field('職種の初期値', jobs, 'まだ選んでいない人をこの職種で判断します。「、」で区切ります。'),
+      !derived && (task.preferOrder.length > 0 || task.allowSameSlot)
         ? el('p', { class: 'field__hint', style: 'margin-bottom:var(--step-4)', text: task.note })
         : null,
       el('label', { class: 'switch' }, active, el('span', { text: 'この業務を割り振る' })),
@@ -186,10 +220,13 @@ function openTaskEditor(task: Task, ctx: Ctx, isNew = false): void {
               name: name.value.trim() || task.name,
               slot: slot.value as Task['slot'],
               headcount: head,
-              minHeadcount: Math.min(head, Math.max(1, Number(minHeadcount.value) || head)),
+              minHeadcount: minHeadcount.value.trim() === ''
+                ? head
+                : Math.min(head, Math.max(0, Math.floor(Number(minHeadcount.value)) || 0)),
               difficulty: Number(difficulty.value) as Task['difficulty'],
               eligibleJob: jobs.value.split(/[、,|]/u).map((s) => s.trim()).filter(Boolean),
               active: active.checked,
+              fixedStaffId: task.derive === 'fixed' ? fixedStaff.value : task.fixedStaffId,
             };
             if (isNew && !patch.name.trim()) {
               toast('業務名を入れてください。', 'blocked');
@@ -253,6 +290,8 @@ function openTaskPicker(ctx: Ctx): void {
     appliesTo: 'all',
     active: true,
     note: '',
+    derive: '',
+    fixedStaffId: '',
   };
 
   const close = openSheet({
@@ -291,16 +330,39 @@ function openTaskPicker(ctx: Ctx): void {
   });
 }
 
+/** 短縮名の長さの上限。表の欄に収まる長さにする。 */
+const MAX_DISPLAY_NAME = 10;
+
+/**
+ * 名簿。短縮名（表に出す名前）はここで付ける。
+ * 勤務表の氏名は長く、週の表の欄では折り返して読みにくくなるため。
+ */
 function openStaffList(ctx: Ctx): void {
   const close = openSheet({
     title: `職員 ${ctx.db.staff.length}人`,
-    lead: '取り込んだ勤務表から起こした名簿です。',
+    lead: '取り込んだ勤務表から起こした名簿です。短縮名を入れると、割り振りの表にはその名前が出ます。',
     body: el('div', {},
       el('div', { class: 'rows' }, ...ctx.db.staff.map((s) =>
-        el('div', { class: 'row' },
+        el('div', { class: 'row row--3' },
           el('div', { class: 'row__main' },
             el('span', { class: 'row__title', text: s.name }),
             el('span', { class: 'row__note', text: s.job })),
+          el('input', {
+            type: 'text',
+            class: 'staff-short',
+            value: s.displayName ?? '',
+            maxlength: String(MAX_DISPLAY_NAME),
+            placeholder: '短縮名',
+            'aria-label': `${s.name} の短縮名`,
+            onchange: (event: Event) => {
+              const value = (event.currentTarget as HTMLInputElement).value.trim().slice(0, MAX_DISPLAY_NAME);
+              ctx.update((current) => ({
+                ...current,
+                staff: current.staff.map((p) => (p.staffId === s.staffId ? { ...p, displayName: value } : p)),
+              }));
+              toast(value ? `${s.name} は「${value}」で表に出します。` : `${s.name} の短縮名を消しました。`);
+            },
+          }),
           el('span', { class: s.active ? 'pill pill--settled' : 'pill', text: s.active ? '在籍' : '停止' })))),
       el('div', { class: 'actions' },
         el('button', { class: 'btn btn--quiet', type: 'button', text: '閉じる', onclick: () => close() }))),
@@ -349,10 +411,7 @@ function confirmWipe(ctx: Ctx): void {
         type: 'button',
         text: '消す',
         onclick: () => {
-          ctx.update(() => ({
-            version: 2, staff: [], aliases: [], tasks: [], shiftTypes: [], skills: [],
-            confirmed: [], runs: [], corrections: [], rules: [], dayNotes: [], settings: ctx.db.settings,
-          }));
+          ctx.update(() => ({ ...emptyDatabase(), settings: ctx.db.settings }));
           close();
           ctx.go('home');
           toast('消しました。');

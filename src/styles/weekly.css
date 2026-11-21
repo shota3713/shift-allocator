@@ -1,9 +1,33 @@
 /*
- * 週ごとの表。画面で確かめて、そのまま A4横 1週1ページで印刷する。
+ * 週ごとの表。画面で確かめて、そのまま 1週1ページで印刷する（A4横 / A3横）。
  * 画面では横に広いので、表だけ横にスクロールさせて業務の列を左に留める。
+ *
+ * 区切りは3段。時間帯（出勤・朝・午前…）の間は太線、業務の間は実線と地の色の
+ * 交互、日の間は少し濃い縦線。紙に刷ったときに「どの業務のどの日か」を
+ * 指でたどれるようにする。
  */
 
-.weekly-lead { color: var(--ink-soft); font-size: var(--text-small); margin-bottom: var(--step-4); }
+.weekly-lead { color: var(--ink-soft); font-size: var(--text-small); margin-bottom: var(--step-3); }
+
+.weekly-paper {
+  display: flex;
+  align-items: center;
+  gap: var(--step-2);
+  margin-bottom: var(--step-4);
+}
+.weekly-paper__label { font-size: var(--text-small); color: var(--ink-soft); margin-right: var(--step-1); }
+.weekly-paper__option {
+  min-width: 4rem;
+  min-height: var(--tap);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font-weight: 700;
+  cursor: pointer;
+  transition: background var(--duration) var(--ease), border-color var(--duration) var(--ease);
+}
+.weekly-paper__option:hover { border-color: var(--accent); }
+.weekly-paper__option--on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
 .weekly-sheet { margin-bottom: var(--step-6); }
 .weekly-sheet__head {
@@ -20,47 +44,102 @@
 .weekly-scroll {
   overflow-x: auto;
   overscroll-behavior-x: contain;
-  border: 1px solid var(--line-strong);
+  border: 1.5px solid var(--ink-soft);
   border-radius: var(--radius-sm);
   background: var(--surface-raised);
 }
 
 .weekly-table {
+  --rule: oklch(70% 0.01 85);
+  --rule-day: oklch(55% 0.012 250);
+  --rule-group: var(--ink);
   width: 100%;
   min-width: 760px;
   border-collapse: collapse;
   table-layout: fixed;
   font-size: var(--text-small);
-  line-height: 1.4;
+  line-height: 1.25;
 }
+.weekly-table__col-task { width: 8.5rem; }
 .weekly-table th,
 .weekly-table td {
-  border: 1px solid var(--line);
-  padding: var(--step-2);
+  border: 1px solid var(--rule);
+  border-left: 1.5px solid var(--rule-day);
+  padding: var(--step-1) var(--step-2);
   vertical-align: top;
   text-align: left;
+  overflow-wrap: anywhere;
 }
 .weekly-table thead th {
   background: var(--surface-sunken);
   text-align: center;
   font-weight: 700;
   white-space: nowrap;
+  border-bottom: 2px solid var(--rule-group);
 }
 .weekly-table__task {
-  width: 8.5rem;
   font-weight: 700;
   position: sticky;
   left: 0;
   z-index: 1;
   background: var(--surface);
+  border-right: 2px solid var(--rule-group) !important;
 }
 thead .weekly-table__task { background: var(--surface-sunken); }
-.weekly-table__slot { display: block; font-size: var(--text-micro); font-weight: 400; color: var(--ink-soft); }
+.weekly-table__slot {
+  display: block;
+  font-size: var(--text-micro);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
 .weekly-table__day--sat { color: oklch(45% 0.12 255); }
 .weekly-table__day--sun { color: var(--blocked); }
 
+/* 時間帯の塊。塊の頭に太線を引く。 */
+.weekly-group > tr:first-child > * { border-top: 2.5px solid var(--rule-group); }
+/* 業務ごとの行は地の色を交互にして、横にたどりやすくする。 */
+.weekly-task:nth-child(even) > td:not(.weekly-table__none) { background: oklch(97.5% 0.006 85); }
+
 .weekly-table__none { background: var(--surface-sunken); }
 .weekly-table__name--empty { color: var(--blocked); font-weight: 700; }
+.weekly-table__rest { line-height: 1.25; }
+.weekly-table__rest .weekly-table__name { display: inline; }
+.weekly-table__rest .weekly-table__name + .weekly-table__name::before { content: '・'; color: var(--ink-faint); }
+
+/* 出勤の欄。区分ごとに色を敷き、行の左に色の帯を立てる。 */
+.weekly-attend > .weekly-table__task { box-shadow: inset 4px 0 0 var(--kind, var(--kind-day)); padding-left: calc(var(--step-2) + 4px); }
+.weekly-attend > td:not(.weekly-table__none),
+.weekly-attend > .weekly-table__task { background: var(--kind-wash, var(--kind-day-wash)); }
+.weekly-attend > .weekly-table__task { color: var(--kind, var(--kind-day)); }
+.weekly-attend--EARLY { --kind: var(--kind-early); --kind-wash: var(--kind-early-wash); }
+.weekly-attend--DAY { --kind: var(--kind-day); --kind-wash: var(--kind-day-wash); }
+.weekly-attend--LATE { --kind: var(--kind-late); --kind-wash: var(--kind-late-wash); }
+.weekly-attend--NURSE { --kind: var(--kind-nurse); --kind-wash: var(--kind-nurse-wash); }
+.weekly-attend--AM_ONLY,
+.weekly-attend--PM_ONLY { --kind: var(--kind-half); --kind-wash: var(--kind-half-wash); }
+.weekly-attend--FREE,
+.weekly-attend--ABSENT { --kind: var(--kind-free); --kind-wash: var(--kind-free-wash); }
+.weekly-attend--SS_HELP { --kind: var(--kind-ss); --kind-wash: var(--kind-ss-wash); }
+.weekly-attend + .weekly-attend > * { border-top: 1.5px solid var(--kind, var(--rule)); }
+
+.weekly-attend__time {
+  font-family: var(--font-figure);
+  font-size: 0.9em;
+  font-weight: 700;
+  color: var(--kind, var(--ink-soft));
+  margin-right: 0.3em;
+}
+.weekly-attend__tag {
+  margin-left: 0.3em;
+  padding: 0 0.3em;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 0.8em;
+  color: var(--caution);
+}
+.weekly-attend__entry--absent { text-decoration: line-through; color: var(--ink-faint); }
+.weekly-attend__entry--guest { font-weight: 700; }
 
 .weekly-table__notes > * { background: var(--accent-wash); }
 .weekly-table__notes .weekly-table__none { background: var(--surface-sunken); }
@@ -81,32 +160,54 @@ thead .weekly-table__task { background: var(--surface-sunken); }
 .weekly-note__print { display: none; }
 
 @media print {
-  @page { size: A4 landscape; margin: 10mm; }
+  /* 用紙の大きさと余白は weekly.ts が @page で差し込む（余白 8mm）。 */
+  .weekly-sheets--A4 { --page-h: 194mm; --max-font: 10.5pt; }
+  .weekly-sheets--A3 { --page-h: 281mm; --max-font: 14pt; }
 
   body { background: #fff; }
   .topbar, .no-print { display: none !important; }
   .view { max-width: none; padding: 0; margin: 0; }
   .view--wide > * { padding-inline: 0; }
 
-  .weekly-sheet { break-after: page; margin: 0; color: #000; }
+  .weekly-sheet {
+    break-after: page;
+    break-inside: avoid;
+    margin: 0;
+    color: #000;
+  }
   .weekly-sheet:last-of-type { break-after: auto; }
-  .weekly-sheet__title { font-size: 14pt; }
+  .weekly-sheet__head { margin-bottom: 2mm; height: 7mm; }
+  .weekly-sheet__title { font-size: 13pt; }
   .weekly-sheet__range { font-size: 10pt; color: #000; }
 
-  .weekly-scroll { overflow: visible; border: 0; border-radius: 0; }
-  .weekly-table { min-width: 0; font-size: 10pt; line-height: 1.35; }
+  .weekly-scroll { overflow: visible; border: 1pt solid #000; border-radius: 0; }
+  .weekly-table {
+    --rule: #888;
+    --rule-day: #444;
+    --rule-group: #000;
+    min-width: 0;
+    /*
+     * 1週を1枚に収める。表の高さを em で見積もった値（--sheet-em、weekly.ts）で
+     * ページの残りの高さを割り、その大きさの字で刷る。線の太さと、名前の折り返しで
+     * 見積もりより伸びるぶんを控える（実測で約6%伸びた）。
+     */
+    font-size: min(var(--max-font), calc((var(--page-h) - 11mm) / var(--sheet-em) * 0.88));
+    line-height: 1.25;
+  }
+  .weekly-table__col-task { width: 12%; }
   .weekly-table th,
-  .weekly-table td { border: 0.5pt solid #555; padding: 1.5mm 2mm; }
-  .weekly-table thead th { background: #eee; }
-  .weekly-table tr { break-inside: avoid; }
-  .weekly-table__task { position: static; width: 17%; background: #fff; }
+  .weekly-table td { padding: 0.25em 0.4em; border-width: 0.5pt; border-left-width: 1pt; }
+  .weekly-table thead th { background: #eee; border-bottom-width: 1.5pt; }
+  .weekly-group > tr:first-child > * { border-top-width: 1.5pt; }
+  .weekly-table__task { position: static; background: #fff; border-right-width: 1.5pt !important; }
   thead .weekly-table__task { background: #eee; }
-  .weekly-table__slot { font-size: 8pt; color: #555; }
+  .weekly-table__slot { font-size: 0.75em; color: #000; }
   .weekly-table__none { background: #f2f2f2; }
+  .weekly-task:nth-child(even) > td:not(.weekly-table__none) { background: #f7f7f7; }
 
   .weekly-table__notes > * { background: #fff; }
   .weekly-table__notes .weekly-table__none { background: #f2f2f2; }
-  .weekly-note { padding: 1.5mm 2mm !important; height: 16mm; }
+  .weekly-note { padding: 0.25em 0.4em !important; height: 3em; }
   .weekly-note__input { display: none; }
   .weekly-note__print { display: block; white-space: pre-wrap; }
 

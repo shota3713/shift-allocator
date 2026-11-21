@@ -8,7 +8,7 @@
 import { normalizeName, normalizeText } from './resolve';
 import type { DifficultyLevel } from './difficulty';
 import { PRESENCE, readShiftCode, type Presence } from './shiftCode';
-import { SLOT, type ShiftType, type Staff, type Task } from './types';
+import { SLOT, type ShiftType, type Staff, type Task, type TaskDerive } from './types';
 import type { ParsedShift } from '../pdf/types';
 
 /** 休みと推定するコード。確認画面で変えられる。 */
@@ -38,6 +38,7 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
       minHeadcount?: number;
       allowSameSlot?: boolean;
       avoidWith?: readonly string[];
+      derive?: TaskDerive;
       note?: string;
     } = {},
   ): Task => ({
@@ -55,9 +56,27 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     appliesTo: 'all',
     active: true,
     note: options.note ?? '',
+    derive: options.derive ?? '',
+    fixedStaffId: '',
   });
 
   return [
+    // 朝の受け入れ。食事と飲み物だけを割り振り、連絡帳はその日の連絡帳係、
+    // 洗面はそれ以外の朝にいる人全員にする。
+    row('MORNING_MEAL', '食事', SLOT.MORNING, 2, 1, careAndNurse),
+    row('MORNING_DRINK', '飲み物', SLOT.MORNING, 2, 1, careAndNurse),
+    row('MORNING_RENRAKU', '連絡帳（朝）', SLOT.MORNING, 1, 1, careAndNurse, {
+      derive: 'follow:RENRAKU',
+      note: 'その日の連絡帳係が入ります',
+    }),
+    row('MORNING_WASH', '洗面', SLOT.MORNING, 1, 1, careAndNurse, {
+      derive: 'rest',
+      note: '朝にいて、食事・飲み物・連絡帳・バイタルを持たない人全員が入ります',
+    }),
+    row('MORNING_VITAL', 'バイタル', SLOT.MORNING, 2, 2, [nurse], {
+      minHeadcount: 1,
+      note: '看護師が1人しか来ていない日は1人にします',
+    }),
     // 午前は 風呂3（リーダー1＋2）・リハ2・看護1 の計6人。
     // 5人しかいない日はリハを1人に落として 風呂3・リハ1・看護1 にする。
     row('REHA_AM', 'リハ担当', SLOT.AM, 3, 2, care, {
@@ -67,6 +86,12 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     row('NURSE_AM', '看護師', SLOT.AM, 2, 1, [nurse]),
     row('BATH', '入浴担当', SLOT.AM, 3, 2, care),
     row('BATH_LEAD', '入浴リーダー', SLOT.AM, 4, 1, care, { exclusiveGroup: lead }),
+    // フリーは、ほかの業務が埋まって人が余った日だけ立てる。午前と午後は別の人にする。
+    row('FREE_AM', '午前フリー', SLOT.AM, 1, 1, care, {
+      minHeadcount: 0,
+      exclusiveGroup: 'FREE',
+      note: 'ほかの業務が埋まって人が余った日だけ立てます。午後フリーとは別の人にします',
+    }),
     // 昼は看護師が優先。早番は最後。上の順の人が出払ってから下へ降りる。
     row('NOON', '昼担当', SLOT.NOON, 2, 3, careAndNurse, {
       preferOrder: [`job:${nurse}`, 'amOnly', 'kind:LATE', 'kind:EARLY'],
@@ -88,6 +113,15 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     row('HANDWORK', '手作業', SLOT.PM, 2, 2, care, {
       minHeadcount: 1,
       note: '午後に人が少ない日は1人に減らします',
+    }),
+    row('FREE_PM', '午後フリー', SLOT.PM, 1, 1, care, {
+      minHeadcount: 0,
+      exclusiveGroup: 'FREE',
+      note: 'ほかの業務が埋まって人が余った日だけ立てます。午前フリーとは別の人にします',
+    }),
+    row('EVENING_CLEAN', '夕方清掃', SLOT.EVENING, 1, 1, [], {
+      derive: 'fixed',
+      note: '決まった人が出勤した日に入ります。担当は業務の設定で選びます',
     }),
   ];
 }

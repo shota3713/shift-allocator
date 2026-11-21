@@ -13,7 +13,7 @@ import { DEFAULT_DIFFICULTY, difficultyFromWeight, isDifficultyLevel } from '../
 import { defaultTasks } from '../core/masters';
 import { PRESENCE, readShiftCode } from '../core/shiftCode';
 import { migrateSkills, type StaffSkills } from '../core/skills';
-import type { LearnedRule, ShiftType, Staff, Task } from '../core/types';
+import type { LearnedRule, ShiftType, Staff, Task, TaskDerive } from '../core/types';
 
 const STORAGE_KEY = 'shift-allocator:v2';
 
@@ -78,6 +78,37 @@ export interface DayNote {
   readonly text: string;
 }
 
+/**
+ * 当日の実際の配置。勤務表（confirmed）は予定として残し、差分だけをここに持つ。
+ * code が空なら「予定はあったが当日いない」。予定にない人を足すときも、
+ * 区分を変えるときも、当日の区分コードを入れる。
+ */
+export interface RosterChange {
+  readonly period: string;
+  readonly day: number;
+  readonly staffId: string;
+  readonly code: string;
+}
+
+export const GUEST_ROLES = ['OJT', '応援'] as const;
+export type GuestRole = (typeof GUEST_ROLES)[number];
+
+/** 名簿にいない OJT・応援の人。日ごとに足す。同じ名前なら同じ人として数える。 */
+export interface Guest {
+  readonly guestId: string;
+  readonly period: string;
+  readonly day: number;
+  readonly name: string;
+  readonly role: GuestRole;
+  /** 担当できる業務の初期値に使う職種。 */
+  readonly job: string;
+  /** 当日の勤務区分コード。在所と出勤時刻はここから引く。 */
+  readonly code: string;
+}
+
+export const PAPER_SIZES = ['A4', 'A3'] as const;
+export type PaperSize = (typeof PAPER_SIZES)[number];
+
 export interface AppSettings {
   /** 介助業務を担当できる職種。業務マスタの初期値に使う。 */
   readonly careJobs: readonly string[];
@@ -88,6 +119,8 @@ export interface AppSettings {
   readonly weightPreference: number;
   readonly improvementPasses: number;
   readonly seed: number;
+  /** 週ごとの表を印刷する用紙。どちらも横向き。 */
+  readonly paperSize: PaperSize;
 }
 
 export interface Database {
@@ -103,6 +136,8 @@ export interface Database {
   readonly corrections: readonly Correction[];
   readonly rules: readonly LearnedRule[];
   readonly dayNotes: readonly DayNote[];
+  readonly roster: readonly RosterChange[];
+  readonly guests: readonly Guest[];
   readonly settings: AppSettings;
 }
 
@@ -114,6 +149,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   weightPreference: 8.0,
   improvementPasses: 5000,
   seed: 20260912,
+  paperSize: 'A4',
 };
 
 export function emptyDatabase(): Database {
@@ -129,6 +165,8 @@ export function emptyDatabase(): Database {
     corrections: [],
     rules: [],
     dayNotes: [],
+    roster: [],
+    guests: [],
     settings: DEFAULT_APP_SETTINGS,
   };
 }
@@ -145,7 +183,13 @@ function normalizeShiftType(type: ShiftType): ShiftType {
     aliases: Array.isArray(type.aliases) ? type.aliases : [],
     am: off ? PRESENCE.OFF : type.am ?? parsed.am,
     pm: off ? PRESENCE.OFF : type.pm ?? parsed.pm,
+    startTime: typeof type.startTime === 'string' ? type.startTime : '',
   };
+}
+
+function isTaskDerive(value: unknown): value is TaskDerive {
+  return value === '' || value === 'rest' || value === 'fixed'
+    || (typeof value === 'string' && value.startsWith('follow:'));
 }
 
 /**
@@ -168,7 +212,7 @@ function normalizeTask(task: Task): Task {
         ? difficultyFromWeight(withWeight.weight)
         : builtIn?.difficulty ?? DEFAULT_DIFFICULTY,
     minHeadcount: typeof task.minHeadcount === 'number'
-      ? Math.min(headcount, Math.max(1, task.minHeadcount))
+      ? Math.min(headcount, Math.max(0, task.minHeadcount))
       : Math.min(headcount, builtIn?.minHeadcount ?? headcount),
     // 掛け持ちの可否・優先順・説明文は画面から触れないので、組み込みの決まりを
     // 正とする。ここを保存データ任せにすると、決まりを直しても古い設定が残る。
@@ -179,6 +223,9 @@ function normalizeTask(task: Task): Task {
       : Array.isArray(task.preferOrder) ? task.preferOrder : [],
     note: builtIn ? builtIn.note : task.note ?? '',
     eligibleJob: Array.isArray(task.eligibleJob) ? task.eligibleJob : [],
+    // 決まり方も画面から触れないので組み込みを正とする。担当の人だけは端末で選ぶ。
+    derive: builtIn ? builtIn.derive : isTaskDerive(task.derive) ? task.derive : '',
+    fixedStaffId: typeof task.fixedStaffId === 'string' ? task.fixedStaffId : '',
   };
 }
 
@@ -196,6 +243,14 @@ function normalizeRun(run: Run): Run {
       seen.set(key, next + 1);
       return { ...a, index: typeof a.index === 'number' ? a.index : next };
     }),
+  };
+}
+
+function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
+  const merged = { ...DEFAULT_APP_SETTINGS, ...(raw ?? {}) };
+  return {
+    ...merged,
+    paperSize: (PAPER_SIZES as readonly string[]).includes(merged.paperSize) ? merged.paperSize : 'A4',
   };
 }
 
@@ -219,7 +274,17 @@ function normalize(raw: unknown): Database {
     rules: list<LearnedRule>(value.rules),
     dayNotes: list<DayNote>(value.dayNotes)
       .filter((n) => typeof n.text === 'string' && typeof n.day === 'number' && n.text !== ''),
-    settings: { ...DEFAULT_APP_SETTINGS, ...(value.settings ?? {}) },
+    roster: list<RosterChange>(value.roster)
+      .filter((r) => typeof r.staffId === 'string' && typeof r.day === 'number' && typeof r.code === 'string'),
+    guests: list<Guest>(value.guests)
+      .filter((g) => typeof g.name === 'string' && g.name.trim() !== '' && typeof g.day === 'number')
+      .map((g) => ({
+        ...g,
+        role: (GUEST_ROLES as readonly string[]).includes(g.role) ? g.role : 'OJT',
+        job: typeof g.job === 'string' ? g.job : '',
+        code: typeof g.code === 'string' ? g.code : '',
+      })),
+    settings: normalizeSettings(value.settings),
   };
 }
 
@@ -275,6 +340,18 @@ export function setDayNote(db: Database, period: string, day: number, text: stri
   const rest = db.dayNotes.filter((n) => !(n.period === period && n.day === day));
   const trimmed = text.trim();
   return { ...db, dayNotes: trimmed ? [...rest, { period, day, text: trimmed }] : rest };
+}
+
+/** その日の当日の配置を差し替える。code が null なら予定どおりに戻す。 */
+export function setRosterChange(
+  db: Database,
+  period: string,
+  day: number,
+  staffId: string,
+  code: string | null,
+): Database {
+  const rest = db.roster.filter((r) => !(r.period === period && r.day === day && r.staffId === staffId));
+  return { ...db, roster: code === null ? rest : [...rest, { period, day, staffId, code }] };
 }
 
 /** 読んで、変えて、書き戻す。UI からの更新はすべてここを通す。 */

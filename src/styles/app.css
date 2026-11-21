@@ -341,6 +341,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .row--caution { border-left: 3px solid var(--caution); }
 /* 現場に出る勤務区分。休み・フリーと見分けるための細い印。 */
 .row--active { border-left: 3px solid var(--settled); }
+.row--3 { grid-template-columns: 1fr auto auto; }
 .row__main { display: grid; gap: 2px; min-width: 0; }
 .row__title { font-weight: 700; }
 .row__note { font-size: var(--text-small); color: var(--ink-soft); }
@@ -360,6 +361,92 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .pill--blocked { background: var(--blocked-wash); color: var(--blocked); }
 .pill--caution { background: var(--caution-wash); color: var(--caution); }
 .pill--settled { background: var(--settled-wash); color: var(--settled); }
+
+/* ── 出勤・当日の配置 ─────────────────────── */
+
+/* 勤務区分の色。週ごとの表（weekly.css）と同じ組を使う。 */
+.attend-chip--EARLY { --kind: var(--kind-early); --kind-wash: var(--kind-early-wash); }
+.attend-chip--DAY { --kind: var(--kind-day); --kind-wash: var(--kind-day-wash); }
+.attend-chip--LATE { --kind: var(--kind-late); --kind-wash: var(--kind-late-wash); }
+.attend-chip--NURSE { --kind: var(--kind-nurse); --kind-wash: var(--kind-nurse-wash); }
+.attend-chip--AM_ONLY,
+.attend-chip--PM_ONLY { --kind: var(--kind-half); --kind-wash: var(--kind-half-wash); }
+.attend-chip--FREE,
+.attend-chip--ABSENT,
+.attend-chip--OFF { --kind: var(--kind-free); --kind-wash: var(--kind-free-wash); }
+.attend-chip--SS_HELP { --kind: var(--kind-ss); --kind-wash: var(--kind-ss-wash); }
+
+.attend-list { display: flex; flex-wrap: wrap; gap: var(--step-1) var(--step-2); }
+.attend-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+  padding: 2px var(--step-2) 2px 0;
+  border-radius: var(--radius-sm);
+  background: var(--kind-wash, var(--surface-sunken));
+  box-shadow: inset 3px 0 0 var(--kind, var(--line-strong));
+  padding-left: calc(var(--step-2) + 3px);
+  font-size: var(--text-small);
+}
+.attend-chip--ABSENT { text-decoration: line-through; color: var(--ink-faint); }
+.attend-chip__time { font-family: var(--font-figure); font-weight: 700; color: var(--kind, var(--ink-soft)); }
+.pill.attend-chip--SS_HELP { background: var(--kind-ss-wash); color: var(--kind-ss); }
+
+/* ほかの結果から決まる業務の行。押して直せないので、ボタンの行と見分ける。 */
+.row--derived { background: var(--surface); border-style: dashed; }
+
+.roster-days {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: var(--step-2);
+  margin-bottom: var(--step-5);
+}
+.roster-day {
+  display: grid;
+  gap: 2px;
+  min-height: var(--tap);
+  padding: var(--step-2) var(--step-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--duration) var(--ease), background var(--duration) var(--ease);
+}
+.roster-day:hover { border-color: var(--accent); background: var(--accent-wash); }
+.roster-day--changed { border-left: 3px solid var(--caution); }
+.roster-day__date { font-weight: 700; }
+.roster-day__count { font-size: var(--text-micro); color: var(--ink-soft); }
+.roster-day__changed { font-size: var(--text-micro); font-weight: 700; color: var(--caution); }
+
+.roster-row {
+  grid-template-columns: 1fr auto;
+  box-shadow: inset 3px 0 0 var(--kind, transparent);
+}
+.roster-row--EARLY { --kind: var(--kind-early); }
+.roster-row--DAY { --kind: var(--kind-day); }
+.roster-row--LATE { --kind: var(--kind-late); }
+.roster-row--NURSE { --kind: var(--kind-nurse); }
+.roster-row--AM_ONLY,
+.roster-row--PM_ONLY { --kind: var(--kind-half); }
+.roster-row--FREE { --kind: var(--kind-free); }
+.roster-row--SS_HELP { --kind: var(--kind-ss); }
+.roster-row__controls { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--step-2); }
+.roster-row__controls select,
+.roster-add select,
+.roster-add input,
+.staff-short,
+.shift-start {
+  min-height: 36px;
+  padding: var(--step-1) var(--step-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+.roster-add { display: flex; flex-wrap: wrap; gap: var(--step-2); margin-top: var(--step-2); }
+.roster-add input { flex: 1 1 10rem; min-width: 0; }
+.staff-short { width: 7.5rem; }
+.shift-start { width: 7rem; }
 
 /* ── 入力 ────────────────────────────────── */
 

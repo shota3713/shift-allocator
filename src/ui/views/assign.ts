@@ -8,8 +8,10 @@
 import type { Ctx } from '../app';
 import { el, openSheet, toast } from '../dom';
 import { runAssignment } from '../../core/assign';
+import { deriveAssignments } from '../../core/derived';
 import { diagnoseFeasibility } from '../../core/feasibility';
-import { buildPlan, weekdayOf } from '../../core/plan';
+import { attendingFor, buildPlan, weekdayOf } from '../../core/plan';
+import { defaultWorkCode } from '../../core/roster';
 import { buildStats } from '../../core/stats';
 import {
   applyLearning,
@@ -22,8 +24,18 @@ import {
 } from '../../core/learn';
 import { defaultTasks } from '../../core/masters';
 import { clearTaskDecisions } from '../../core/skills';
-import { newId, nowIso, type Run } from '../../store/db';
-import { SLOT_LABELS, SLOT_ORDER, WEEKDAY_LABELS, type Assignment, type Plan } from '../../core/types';
+import { newId, nowIso, setRosterChange, type Run } from '../../store/db';
+import type { ShiftKind } from '../../core/shiftCode';
+import {
+  SLOT_LABELS,
+  SLOT_ORDER,
+  WEEKDAY_LABELS,
+  isOptionalTask,
+  type Assignment,
+  type Plan,
+  type Slot,
+} from '../../core/types';
+import { describeShift, openRosterSheet } from './roster';
 
 export function renderAssign(root: HTMLElement, ctx: Ctx): void {
   const db = ctx.db;
@@ -61,6 +73,7 @@ export function renderAssign(root: HTMLElement, ctx: Ctx): void {
   }
 
   renderCapabilityGaps(root, ctx, plan);
+  renderNewBuiltIns(root, ctx, plan);
 
   const runs = db.runs.filter((r) => r.period === period)
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -108,6 +121,79 @@ function renderCapabilityGaps(root: HTMLElement, ctx: Ctx, plan: Plan): void {
   );
 }
 
+/** 朝の受け入れ・夕方清掃のように、あとから標準に加わった業務。 */
+const ADDED_BUILT_INS = [
+  'MORNING_MEAL', 'MORNING_DRINK', 'MORNING_RENRAKU', 'MORNING_WASH', 'MORNING_VITAL',
+  'FREE_AM', 'FREE_PM', 'EVENING_CLEAN',
+];
+
+/**
+ * 標準に加わった業務がまだ無ければ、足すかを聞く。黙って足すと、
+ * 消したつもりの業務が戻ってきたように見える。担当の決まっていない
+ * 固定担当の業務（夕方清掃）も、ここで名指しする。
+ */
+function renderNewBuiltIns(root: HTMLElement, ctx: Ctx, plan: Plan): void {
+  const existing = new Set(ctx.db.tasks.map((t) => t.taskId));
+  const missing = defaultTasks(ctx.db.settings.careJobs)
+    .filter((t) => ADDED_BUILT_INS.includes(t.taskId) && !existing.has(t.taskId));
+  const unassigned = plan.derivedTasks.filter((t) => t.derive === 'fixed' && !t.fixedStaffId);
+
+  if (missing.length > 0) {
+    root.append(
+      el('div', { class: 'notice notice--caution' },
+        el('strong', { text: `標準の業務に ${missing.map((t) => t.name).join('・')} が加わりました。` }),
+        el('span', { text: '朝の受け入れ（食事・飲み物・連絡帳・洗面・バイタル）、午前・午後のフリー、夕方清掃です。足すと表に出ます。' })),
+      el('div', { class: 'actions', style: 'margin-bottom:var(--step-4)' },
+        el('button', {
+          class: 'btn btn--primary',
+          type: 'button',
+          text: 'まとめて足す',
+          onclick: () => {
+            ctx.update((db) => ({ ...db, tasks: [...db.tasks, ...missing] }));
+            toast(`${missing.length}業務を足しました。割り振り直すと反映されます。`);
+          },
+        })),
+    );
+  }
+  if (unassigned.length > 0) {
+    root.append(
+      el('div', { class: 'notice notice--caution' },
+        el('strong', { text: `${unassigned.map((t) => t.name).join('・')} の担当が決まっていません。` }),
+        el('span', { text: '「設定 → 業務」で担当の人を選ぶと、その人が来た日に入ります。' })),
+      el('div', { class: 'actions', style: 'margin-bottom:var(--step-4)' },
+        el('button', { class: 'btn btn--quiet', type: 'button', text: '設定で選ぶ', onclick: () => ctx.go('settings') })),
+    );
+  }
+}
+
+/** 当日の配置を変えた人数。日ごとのボタンに添える。 */
+function changedCount(plan: Plan, day: number): number {
+  return (plan.attendance.get(day) ?? []).filter((e) => e.status !== 'planned').length;
+}
+
+/** 日ごとの「当日の配置」への入り口。割り振る前に欠勤や応援を入れておけるようにする。 */
+function renderRosterDays(root: HTMLElement, ctx: Ctx, plan: Plan): void {
+  const days = [...new Set([...plan.workingByDay.keys(), ...plan.attendance.keys()])].sort((a, b) => a - b);
+  root.append(
+    el('h2', { class: 'section-title', text: '当日の配置' }),
+    el('p', { class: 'card__body', style: 'margin-bottom:var(--step-3)',
+      text: '欠勤・予定外の出勤・OJTや応援の人は、日を選んで入れてください。勤務表の予定は変わりません。' }),
+    el('div', { class: 'roster-days' },
+      ...days.map((day) => {
+        const changed = changedCount(plan, day);
+        return el('button', {
+          class: changed > 0 ? 'roster-day roster-day--changed' : 'roster-day',
+          type: 'button',
+          onclick: () => openRosterSheet(ctx, day),
+        },
+          el('span', { class: 'roster-day__date',
+            text: `${day}日（${WEEKDAY_LABELS[weekdayOf(plan.year, plan.month, day)]}）` }),
+          el('span', { class: 'roster-day__count', text: `現場 ${plan.workingByDay.get(day)?.length ?? 0}人` }),
+          changed > 0 ? el('span', { class: 'roster-day__changed', text: `変更 ${changed}` }) : null);
+      })),
+  );
+}
+
 /* ── 実行前 ────────────────────────────────── */
 
 function renderBeforeRun(root: HTMLElement, ctx: Ctx, plan: Plan): void {
@@ -115,7 +201,7 @@ function renderBeforeRun(root: HTMLElement, ctx: Ctx, plan: Plan): void {
 
   root.append(
     el('div', { class: 'tally' },
-      tally(String(plan.staffIds.length), '出勤者', ''),
+      tally(String(plan.staffIds.length), 'デイの出勤者', ''),
       tally(String(plan.workingByDay.size), '営業日', ''),
       tally(String(plan.slots.length), '埋める枠', ''),
       tally(String(report.shortfall), '埋まらない枠', report.ok ? 'settled' : 'caution')),
@@ -141,6 +227,8 @@ function renderBeforeRun(root: HTMLElement, ctx: Ctx, plan: Plan): void {
       root.append(el('p', { class: 'card__body', text: `ほか ${report.issues.length - 20} 件` }));
     }
   }
+
+  renderRosterDays(root, ctx, plan);
 
   root.append(
     el('div', { class: 'actions actions--sticky' },
@@ -188,18 +276,27 @@ function execute(ctx: Ctx, plan: Plan): void {
  * 結果は実行したときの写し。あとから業務を足しても、この結果には入らない。
  * 黙っていると「足したのに割り振られない」と見えるので、ずれを名指しで出す。
  */
-function staleTasks(plan: Plan, run: Run): { missing: string[]; extra: string[] } {
+function staleTasks(plan: Plan, run: Run): { missing: string[]; extra: string[]; away: string[] } {
   const key = (a: { day: number; taskId: string; index: number }): string =>
     `${a.day}#${a.taskId}#${a.index}`;
   const planned = new Set(plan.slots.map(key));
   const inRun = new Set(run.assignments.map(key));
+  const tasksInRun = new Set(run.assignments.map((a) => a.taskId));
   const nameOf = (id: string): string => plan.tasksById.get(id)?.name ?? id;
 
-  const missing = [...new Set(plan.slots.filter((s) => !inRun.has(key(s))).map((s) => s.taskId))];
+  // 人が余った日だけの枠は、埋まらなければ結果に残さない。枠ごとには比べず、
+  // その業務が結果にひとつも無いときだけ「入っていない」とする。
+  const missing = [...new Set(plan.slots
+    .filter((s) => (isOptionalTask(plan.tasksById.get(s.taskId)) ? !tasksInRun.has(s.taskId) : !inRun.has(key(s))))
+    .map((s) => s.taskId))];
   const extra = [...new Set(
     run.assignments.filter((a) => !planned.has(key(a))).map((a) => a.taskId),
   )];
-  return { missing: missing.map(nameOf), extra: extra.map(nameOf) };
+  // 当日の配置から外した人に、まだ業務が残っている。
+  const away = [...new Set(run.assignments
+    .filter((a) => a.staffId && !(plan.workingByDay.get(a.day) ?? []).includes(a.staffId))
+    .map((a) => `${a.day}日 ${plan.staffNames.get(a.staffId) ?? a.staffId}`))];
+  return { missing: missing.map(nameOf), extra: extra.map(nameOf), away };
 }
 
 function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: readonly Run[]): void {
@@ -208,7 +305,7 @@ function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: r
   const manual = run.assignments.filter((a) => a.origin === 'manual').length;
   const stale = staleTasks(plan, run);
 
-  if (stale.missing.length > 0 || stale.extra.length > 0) {
+  if (stale.missing.length > 0 || stale.extra.length > 0 || stale.away.length > 0) {
     root.append(
       el('div', { class: 'notice notice--caution' },
         el('strong', { text: 'この結果は、いまの業務の設定と合っていません。' }),
@@ -217,6 +314,9 @@ function renderResult(root: HTMLElement, ctx: Ctx, plan: Plan, run: Run, runs: r
           : null,
         stale.extra.length > 0
           ? el('span', { text: `${stale.extra.join('・')} は、いまは割り振らない設定です。` })
+          : null,
+        stale.away.length > 0
+          ? el('span', { text: `当日の配置にいない人に業務が残っています（${stale.away.slice(0, 5).join('、')}${stale.away.length > 5 ? ' ほか' : ''}）。` })
           : null,
         el('span', { text: '割り振り直すと反映されます。手修正はやり直しになります。' })),
       el('div', { class: 'actions', style: 'margin-bottom:var(--step-4)' },
@@ -298,10 +398,30 @@ function toAssignments(run: Run, plan: Plan): Assignment[] {
   }));
 }
 
+/** その日の出勤の一覧。区分ごとに色を分け、時刻と名前を並べる。 */
+function renderDayAttendance(plan: Plan, day: number): HTMLElement {
+  const entries = plan.attendance.get(day) ?? [];
+  return el('div', { class: 'attend-list' },
+    ...entries.map((entry) => el('span', {
+      class: `attend-chip attend-chip--${entry.status === 'absent' ? 'ABSENT' : entry.kind}`,
+      title: describeShift(entry),
+    },
+      el('span', { class: 'attend-chip__time',
+        text: entry.status === 'absent' ? '不在' : entry.startTime || SHIFT_LABEL_SHORT[entry.kind] }),
+      entry.name)));
+}
+
+/** 時刻が未設定のときに代わりに出す区分の短い名前。 */
+const SHIFT_LABEL_SHORT: Record<ShiftKind, string> = {
+  DAY: '日勤', EARLY: '早番', LATE: '遅番', NURSE: '看護', AM_ONLY: '午前', PM_ONLY: '午後',
+  FREE: 'フリー', SS_HELP: 'SS', OFF: '休',
+};
+
 function renderDay(ctx: Ctx, plan: Plan, run: Run, day: number): HTMLElement {
   const weekday = WEEKDAY_LABELS[weekdayOf(plan.year, plan.month, day)];
-  const rows = SLOT_ORDER.flatMap((slot) =>
-    run.assignments
+  const derived = deriveAssignments(plan, run.assignments).filter((a) => a.day === day);
+  const rows = SLOT_ORDER.flatMap((slot) => [
+    ...run.assignments
       .filter((a) => plan.tasksById.get(a.taskId)?.slot === slot)
       .filter((a) => a.day === day)
       .sort((a, b) => a.index - b.index)
@@ -325,14 +445,50 @@ function renderDay(ctx: Ctx, plan: Plan, run: Run, day: number): HTMLElement {
             class: a.origin === 'manual' ? 'pill pill--caution' : `pill`,
             text: a.origin === 'manual' ? '手修正' : SLOT_LABELS[slot],
           }));
-      }));
+      }),
+    ...renderDerivedRows(plan, derived, slot),
+  ]);
 
   return el('details', { class: 'card', style: 'padding:0' },
     el('summary', {
       style: 'padding:var(--step-4);cursor:pointer;font-weight:700;list-style:none',
       text: `${day}日（${weekday}）`,
     }),
-    el('div', { class: 'rows', style: 'padding:0 var(--step-4) var(--step-4)' }, ...rows));
+    el('div', { style: 'padding:0 var(--step-4) var(--step-4)' },
+      renderDayAttendance(plan, day),
+      el('div', { class: 'actions', style: 'margin:var(--step-2) 0 var(--step-3)' },
+        el('button', {
+          class: 'btn btn--quiet btn--small',
+          type: 'button',
+          text: '当日の配置を変える',
+          onclick: () => openRosterSheet(ctx, day),
+        })),
+      el('div', { class: 'rows' }, ...rows)));
+}
+
+/**
+ * 朝の連絡帳・洗面・夕方清掃の行。押しても直せない（元の業務を直すとついて来る）ので、
+ * ボタンにはせず、どう決まったかを添える。
+ */
+function renderDerivedRows(
+  plan: Plan,
+  derived: readonly { taskId: string; staffId: string }[],
+  slot: Slot,
+): HTMLElement[] {
+  return plan.derivedTasks
+    .filter((task) => task.slot === slot)
+    .map((task) => ({ task, seats: derived.filter((a) => a.taskId === task.taskId) }))
+    .filter(({ seats }) => seats.length > 0)
+    .map(({ task, seats }) => {
+      const names = seats.map((a) => (a.staffId ? plan.staffNames.get(a.staffId) ?? a.staffId : ''));
+      const unfilled = names.some((n) => n === '');
+      return el('div', { class: unfilled ? 'row row--blocked' : 'row row--derived' },
+        el('div', { class: 'row__main' },
+          el('span', { class: 'row__title', text: task.name }),
+          el('span', { class: 'row__note', text: unfilled ? '担当が決まっていません' : names.join('、') }),
+          task.note ? el('span', { class: 'row__note', text: task.note }) : null),
+        el('span', { class: 'pill', text: SLOT_LABELS[slot] }));
+    });
 }
 
 /* ── 手修正と学習 ──────────────────────────── */
@@ -341,10 +497,11 @@ const GROUP_LABELS: Record<SlotCandidate['group'], string> = {
   ready: 'そのまま入れられる人',
   limited: '入れると無理が出る人',
   absent: 'この時間帯は現場にいない人',
+  unscheduled: '予定にない人・当日いない人',
 };
 
 function optionsFor(candidates: readonly SlotCandidate[], current: string): HTMLElement[] {
-  const groups: SlotCandidate['group'][] = ['ready', 'limited', 'absent'];
+  const groups: SlotCandidate['group'][] = ['ready', 'limited', 'absent', 'unscheduled'];
   return groups.flatMap((group) => {
     const members = candidates.filter((c) => c.group === group);
     if (members.length === 0) return [];
@@ -423,7 +580,12 @@ function openCorrection(ctx: Ctx, plan: Plan, run: Run, key: SlotKey): void {
               close();
               return;
             }
-            ctx.update((db) => recordCorrection(db, {
+            // 予定にない人を選んだら、その日の配置にも足す。足さないと
+            // 「いない人が担当」の表になり、洗面などの人数も合わなくなる。
+            const pulled = candidates.find((c) => c.staffId === after)?.group === 'unscheduled';
+            ctx.update((db) => recordCorrection(pulled
+              ? setRosterChange(db, plan.periodKey, key.day, after, defaultWorkCode(db, plan.periodKey, attendingFor(db)))
+              : db, {
               runId: run.runId,
               period: plan.periodKey,
               day: key.day,

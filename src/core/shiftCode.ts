@@ -9,6 +9,7 @@
  *   F/日_032DS  → 午前はフリー、午後は現場
  *   F_032DS     → 1日フリー（業務は割り振らない）
  *   清掃_032DS  → 清掃だけの勤務（他の業務は割り振らない）
+ *   日_032SS    → ショートステイへヘルプ（デイサービスにはいない）
  *
  * フリーの半日に業務を割り振らないのが要点。ここを「出勤しているか」だけで
  * 判断すると、1日フリーの人にリハ担当が乗る。
@@ -35,6 +36,8 @@ export const SHIFT_KIND = {
   AM_ONLY: 'AM_ONLY',
   PM_ONLY: 'PM_ONLY',
   FREE: 'FREE',
+  /** ショートステイへヘルプに行く。デイサービスの配置には数えない。 */
+  SS_HELP: 'SS_HELP',
   OFF: 'OFF',
 } as const;
 export type ShiftKind = (typeof SHIFT_KIND)[keyof typeof SHIFT_KIND];
@@ -47,6 +50,7 @@ export const SHIFT_KIND_LABELS: Record<ShiftKind, string> = {
   AM_ONLY: '午前のみ',
   PM_ONLY: '午後のみ',
   FREE: 'フリー',
+  SS_HELP: 'SSヘルプ',
   OFF: '休み',
 };
 
@@ -69,6 +73,17 @@ const TOKEN_LABELS: Record<TokenKind, string> = {
   drive: '送迎',
   unknown: '不明',
 };
+
+/** ショートステイの事業所コード。 */
+const SHORT_STAY_SUFFIX = /_\d{2,4}SS$/u;
+
+/**
+ * ショートステイ（SS）の勤務か。勤務表では緑の SS で出る。
+ * この日はショートステイへヘルプに行くので、デイサービスの業務は割り振らない。
+ */
+export function isShortStayCode(code: string): boolean {
+  return SHORT_STAY_SUFFIX.test(normalizeText(code));
+}
 
 /** 事業所コードを落とした本体を返す。 */
 export function shiftCodeBase(code: string): string {
@@ -137,8 +152,17 @@ export function readShiftCode(code: string): ShiftMeaning {
 
   const amKind = classify(amToken);
   const pmKind = classify(pmToken);
-  const am = presenceOf(amKind);
-  const pm = presenceOf(pmKind);
+  const ssHelp = isShortStayCode(code) && (amKind !== 'off' || pmKind !== 'off');
+  // SSヘルプの日はデイサービスにいない。休み扱いにはせず、フリーとして来ていることは残す。
+  const am = ssHelp ? PRESENCE.FREE : presenceOf(amKind);
+  const pm = ssHelp ? PRESENCE.FREE : presenceOf(pmKind);
+
+  if (ssHelp) {
+    return {
+      base, am, pm, kind: SHIFT_KIND.SS_HELP, amOnly: false, pmOnly: false,
+      label: 'ショートステイへヘルプ', assumed: false,
+    };
+  }
 
   const label = halves.length > 1
     ? `午前 ${TOKEN_LABELS[amKind]} / 午後 ${TOKEN_LABELS[pmKind]}`

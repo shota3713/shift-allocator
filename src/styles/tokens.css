@@ -35,6 +35,26 @@
   --settled: oklch(50% 0.09 155);
   --settled-wash: oklch(95% 0.035 155);
 
+  /*
+   * 勤務区分の色。状態色とは別の、区分を見分けるためだけの色。
+   * 現場の要望で「誰が何時から来るか」を色で拾えるようにする。SS は勤務表と同じ緑。
+   * 文字に使う濃い色（--kind-*）と、欄の地に敷く薄い色（--kind-*-wash）の組。
+   */
+  --kind-early: oklch(52% 0.13 55);
+  --kind-early-wash: oklch(94% 0.04 65);
+  --kind-day: oklch(45% 0.06 240);
+  --kind-day-wash: oklch(95% 0.018 240);
+  --kind-late: oklch(45% 0.12 295);
+  --kind-late-wash: oklch(94.5% 0.035 295);
+  --kind-nurse: oklch(50% 0.13 350);
+  --kind-nurse-wash: oklch(95% 0.03 350);
+  --kind-half: oklch(50% 0.1 95);
+  --kind-half-wash: oklch(95.5% 0.045 95);
+  --kind-free: oklch(50% 0.01 250);
+  --kind-free-wash: oklch(94% 0.005 250);
+  --kind-ss: oklch(48% 0.14 150);
+  --kind-ss-wash: oklch(93.5% 0.06 150);
+
   --text-micro: 0.6875rem;
   --text-small: 0.8125rem;
   --text-body: 0.9375rem;

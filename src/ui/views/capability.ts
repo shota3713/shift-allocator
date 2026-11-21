@@ -12,13 +12,22 @@
 import type { Ctx } from '../app';
 import { el, openSheet, toast } from '../dom';
 import { isConfigured, setSkills, setTaskMembers, taskIdsFor } from '../../core/skills';
-import { SLOT_LABELS, type Staff, type Task } from '../../core/types';
+import { SLOT_LABELS, isDerivedTask, type Staff, type Task } from '../../core/types';
+import type { Database } from '../../store/db';
+
+/**
+ * ここで選ぶのは割り振りの計算に乗る業務だけ。朝の連絡帳・洗面・夕方清掃は
+ * ほかの結果から決まるので、担当できる人を選んでも効かない。
+ */
+function assignable(db: Database): Task[] {
+  return db.tasks.filter((t) => !isDerivedTask(t));
+}
 
 /** ある業務を担当できる人の staffId。 */
 function membersOf(ctx: Ctx, taskId: string): string[] {
   const db = ctx.db;
   return db.staff
-    .filter((s) => taskIdsFor(s.staffId, s.job, db.tasks, db.skills).includes(taskId))
+    .filter((s) => taskIdsFor(s.staffId, s.job, assignable(db), db.skills).includes(taskId))
     .map((s) => s.staffId);
 }
 
@@ -42,7 +51,7 @@ export function renderCapability(root: HTMLElement, ctx: Ctx): void {
         : '全員ぶん選んであります。' }),
     el('p', { class: 'card__body', style: 'margin-bottom:var(--step-3)',
       text: '一度選べば、来月の勤務表を取り込んだあともそのまま使います。同じ名前の人に引き継ぎます。' }),
-    el('div', { class: 'rows' }, ...db.tasks.map((task) => renderTaskRow(task, ctx))),
+    el('div', { class: 'rows' }, ...assignable(db).map((task) => renderTaskRow(task, ctx))),
     el('h3', { class: 'card__title', style: 'margin-top:var(--step-5)', text: '職員ごとに選ぶ' }),
     el('div', { class: 'rows' }, ...db.staff.map((person) => renderStaffRow(person, ctx))),
   );
@@ -148,7 +157,7 @@ function openTaskMembers(task: Task, ctx: Ctx): void {
 
 function renderStaffRow(person: Staff, ctx: Ctx): HTMLElement {
   const db = ctx.db;
-  const taskIds = taskIdsFor(person.staffId, person.job, db.tasks, db.skills);
+  const taskIds = taskIdsFor(person.staffId, person.job, assignable(db), db.skills);
   const names = taskIds
     .map((id) => db.tasks.find((t) => t.taskId === id)?.name ?? id)
     .join('、');
@@ -171,9 +180,9 @@ function renderStaffRow(person: Staff, ctx: Ctx): HTMLElement {
 
 function openStaffTasks(person: Staff, ctx: Ctx): void {
   const db = ctx.db;
-  const chosen = new Set(taskIdsFor(person.staffId, person.job, db.tasks, db.skills));
+  const chosen = new Set(taskIdsFor(person.staffId, person.job, assignable(db), db.skills));
 
-  const boxes = db.tasks.map((task) =>
+  const boxes = assignable(db).map((task) =>
     el('label', { class: 'switch' },
       el('input', {
         type: 'checkbox',
@@ -202,7 +211,7 @@ function openStaffTasks(person: Staff, ctx: Ctx): void {
                 current.skills,
                 person.staffId,
                 [...chosen],
-                current.tasks.map((t) => t.taskId),
+                assignable(current).map((t) => t.taskId),
               ),
             }));
             close();

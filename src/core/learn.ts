@@ -11,6 +11,7 @@
 import { canAssign, isEligible, isPresent, preferenceTier } from './assign';
 import { weekdayOf } from './plan';
 import { SHIFT_KIND_LABELS } from './shiftCode';
+import { isGuestStaffId } from './roster';
 import { RULE_TYPE, WEEKDAY_LABELS, type Assignment, type LearnedRule, type Plan, type RuleType } from './types';
 import type { Correction, Database } from '../store/db';
 import { newId, nowIso } from '../store/db';
@@ -39,7 +40,11 @@ export interface SlotCandidate {
   readonly ok: boolean;
   /** 優先の理由、または入れられない理由。 */
   readonly note: string;
-  readonly group: 'ready' | 'limited' | 'absent';
+  /**
+   * unscheduled はその日の配置にいない人。選ぶと当日の配置に足す（予定外の出勤）。
+   * 予定に縛られずに選べないと、急な交代をアプリの外で直すことになる。
+   */
+  readonly group: 'ready' | 'limited' | 'absent' | 'unscheduled';
 }
 
 /** 枠を特定する鍵。同じ業務に複数人いるので index が要る。 */
@@ -115,7 +120,25 @@ export function candidatesForSlot(
     return { staffId, name, job, ok: true, note, group: 'ready' };
   });
 
-  const rank = (c: SlotCandidate): number => (c.group === 'ready' ? 0 : c.group === 'limited' ? 1 : 2);
+  const working = new Set(plan.workingByDay.get(key.day) ?? []);
+  const attendance = new Map((plan.attendance.get(key.day) ?? []).map((e) => [e.staffId, e]));
+  for (const [staffId, name] of plan.staffNames) {
+    if (working.has(staffId) || isGuestStaffId(staffId)) continue;
+    const entry = attendance.get(staffId);
+    const why = entry?.status === 'absent'
+      ? '当日いない人です'
+      : entry?.kind === 'SS_HELP'
+        ? 'SSヘルプの日です'
+        : entry ? 'この日は現場に入らない勤務です' : '出勤の予定がありません';
+    rows.push({
+      staffId, name, job: plan.staffJob.get(staffId) ?? '', ok: false,
+      note: `${why}（選ぶと当日の配置に足します）`,
+      group: 'unscheduled',
+    });
+  }
+
+  const RANK: Record<SlotCandidate['group'], number> = { ready: 0, limited: 1, absent: 2, unscheduled: 3 };
+  const rank = (c: SlotCandidate): number => RANK[c.group];
   return rows.sort((a, b) => {
     if (rank(a) !== rank(b)) return rank(a) - rank(b);
     if (a.group === 'ready') {

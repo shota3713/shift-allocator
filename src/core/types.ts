@@ -8,12 +8,18 @@
 import type { DifficultyLevel } from './difficulty';
 import type { Presence, ShiftKind } from './shiftCode';
 
-/** 時間帯。同じ時間帯に1人が持てる業務は1つだけ（体は1つしかない）。 */
-export const SLOT = { AM: 'AM', NOON: 'NOON', PM: 'PM' } as const;
+/**
+ * 時間帯。同じ時間帯に1人が持てる業務は1つだけ（体は1つしかない）。
+ * 朝は午前の前の受け入れ、夕方は午後の後の片付け。どちらも午前・午後の
+ * 業務とは時間が重ならないので、別の時間帯として持つ。
+ */
+export const SLOT = { MORNING: 'MORNING', AM: 'AM', NOON: 'NOON', PM: 'PM', EVENING: 'EVENING' } as const;
 export type Slot = (typeof SLOT)[keyof typeof SLOT];
 
-export const SLOT_LABELS: Record<Slot, string> = { AM: '午前', NOON: '昼', PM: '午後' };
-export const SLOT_ORDER: readonly Slot[] = ['AM', 'NOON', 'PM'];
+export const SLOT_LABELS: Record<Slot, string> = {
+  MORNING: '朝', AM: '午前', NOON: '昼', PM: '午後', EVENING: '夕方',
+};
+export const SLOT_ORDER: readonly Slot[] = ['MORNING', 'AM', 'NOON', 'PM', 'EVENING'];
 
 export const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 export type WeekdayKey = (typeof WEEKDAY_KEYS)[number];
@@ -25,9 +31,16 @@ export const WEEKDAY_LABELS: Record<WeekdayKey, string> = {
 export interface Staff {
   readonly staffId: string;
   readonly name: string;
+  /** 表に出す短い名前（例: タロ）。空なら name を使う。 */
+  readonly displayName?: string;
   readonly job: string;
   readonly active: boolean;
   readonly note: string;
+}
+
+/** 表に出す名前。短縮名があればそちら。 */
+export function displayNameOf(staff: Pick<Staff, 'name' | 'displayName'>): string {
+  return staff.displayName?.trim() || staff.name;
 }
 
 /**
@@ -44,6 +57,8 @@ export interface ShiftType {
   readonly aliases: readonly string[];
   readonly am: Presence;
   readonly pm: Presence;
+  /** 始業時刻（'7:30' など）。空なら表に出さない。 */
+  readonly startTime?: string;
 }
 
 /** 業務の適用対象。曜日指定はカンマ区切りの WeekdayKey。 */
@@ -60,6 +75,7 @@ export interface Task {
    * 人が足りない日に、ここまでなら人数を減らしてよいという下限。
    * 例）午前に5人しかいない日は、リハ担当を2人から1人に落として
    * 風呂3・リハ1・看護1 にする。headcount と同じなら減らさない。
+   * 0 なら、ほかの業務が埋まって人が余った日だけ立てる（午前フリー・午後フリー）。
    */
   readonly minHeadcount: number;
   /**
@@ -83,6 +99,26 @@ export interface Task {
   readonly appliesTo: AppliesTo;
   readonly active: boolean;
   readonly note: string;
+  /**
+   * 割り振りの計算に乗せず、ほかの結果から決まる業務。空文字なら通常の業務。
+   *   'follow:<taskId>' その日その業務の1人目と同じ人（朝の連絡帳 = その日の連絡帳係）
+   *   'rest'            その時間帯に現場にいて、何も持っていない人全員（洗面）
+   *   'fixed'           fixedStaffId の人が出勤した日に、その人（夕方清掃）
+   */
+  readonly derive: TaskDerive;
+  /** derive が 'fixed' のときの担当。実名はリポジトリに置かず、端末で選ぶ。 */
+  readonly fixedStaffId: string;
+}
+
+export type TaskDerive = '' | 'rest' | 'fixed' | `follow:${string}`;
+
+export function isDerivedTask(task: Pick<Task, 'derive'>): boolean {
+  return task.derive !== '';
+}
+
+/** 人が余った日だけ立てる業務か（最低人数 0。午前・午後フリー）。 */
+export function isOptionalTask(task: Pick<Task, 'minHeadcount'> | undefined): boolean {
+  return task?.minHeadcount === 0;
 }
 
 export const RULE_TYPE = {
@@ -142,12 +178,40 @@ export interface Plan {
   readonly workingByDay: ReadonlyMap<number, readonly string[]>;
   readonly staffIds: readonly string[];
   readonly staffJob: ReadonlyMap<string, string>;
+  /** staffId → 表に出す名前（短縮名があればそちら）。OJT・応援の人も入る。 */
   readonly staffNames: ReadonlyMap<string, string>;
   /** staffId → 日 → その日の在所。半日単位の可否はここだけで決まる。 */
   readonly presence: ReadonlyMap<string, ReadonlyMap<number, DayPresence>>;
   /** taskId → 担当できる staffId。職種の初期値と個人の設定を合わせた結果。 */
   readonly capable: ReadonlyMap<string, ReadonlySet<string>>;
   readonly rules: readonly LearnedRule[];
+  /** ほかの結果から決まる業務（朝の連絡帳・洗面・夕方清掃）。slots には入らない。 */
+  readonly derivedTasks: readonly Task[];
+  /** 表に並べる業務の順。設定の並び順（割り振る業務と、ほかから決まる業務を混ぜた順）。 */
+  readonly taskOrder: readonly string[];
+  /**
+   * 日 → その日に来ている人の一覧。フリー・清掃・SSヘルプの人も入る。
+   * 「誰が何時から来るか」を表に出すためのもので、割り振りの可否は presence で決める。
+   */
+  readonly attendance: ReadonlyMap<number, readonly AttendanceEntry[]>;
+}
+
+/** ある日に来る（来る予定だった）人。 */
+export interface AttendanceEntry {
+  readonly staffId: string;
+  readonly name: string;
+  /** 当日の勤務区分コード。当日いなくなった人は予定のコード。 */
+  readonly code: string;
+  readonly kind: ShiftKind;
+  readonly startTime: string;
+  /**
+   * planned: 勤務表どおり / changed: 当日の配置で区分を変えた /
+   * added: 予定になかったが当日来た / absent: 予定はあったが当日いない /
+   * guest: OJT・応援
+   */
+  readonly status: 'planned' | 'changed' | 'added' | 'absent' | 'guest';
+  /** OJT・応援の別。guest のときだけ。 */
+  readonly role: string;
 }
 
 /** ある人のある日の在所。 */

@@ -50,6 +50,8 @@ export function task(overrides: Partial<Task> & { taskId: string; name: string }
     appliesTo: 'all',
     active: true,
     note: '',
+    derive: '',
+    fixedStaffId: '',
     ...overrides,
   };
 }

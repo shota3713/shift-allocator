@@ -20,7 +20,9 @@
 import { weightOf } from './difficulty';
 import {
   RULE_TYPE,
+  isOptionalTask,
   type Assignment,
+  type DayPresence,
   type AssignSettings,
   type LearnedRule,
   type Plan,
@@ -51,9 +53,13 @@ export function isEligible(staffId: string, task: Task | undefined, plan: Plan):
  */
 export function isPresent(staffId: string, day: number, slot: Slot, plan: Plan): boolean {
   const here = plan.presence.get(staffId)?.get(day);
-  if (!here) return false;
-  if (slot === 'AM') return here.am;
-  if (slot === 'PM') return here.pm;
+  return here ? presentInSlot(here, slot) : false;
+}
+
+/** その在所で、その時間帯に現場にいるか。朝は午前、夕方は午後の在所で決める。 */
+export function presentInSlot(here: DayPresence, slot: Slot): boolean {
+  if (slot === 'AM' || slot === 'MORNING') return here.am;
+  if (slot === 'PM' || slot === 'EVENING') return here.pm;
   return here.noon;
 }
 
@@ -90,6 +96,35 @@ export function taskAppliesTo(appliesTo: string, weekday: WeekdayKey): boolean {
  * 原則は「同じ時間帯に1人が持てる業務は1つ」。体操のように短く済む業務だけ
  * allowSameSlot で例外にし、それでも組ませたくない相手は avoidWith に書く。
  */
+function conflictsWith(task: Task, otherTask: Task): boolean {
+  if (otherTask.taskId === task.taskId) return true;
+  if (task.avoidWith.includes(otherTask.taskId)) return true;
+  if (otherTask.avoidWith.includes(task.taskId)) return true;
+  if (task.exclusiveGroup && otherTask.exclusiveGroup === task.exclusiveGroup) return true;
+  return otherTask.slot === task.slot && !task.allowSameSlot && !otherTask.allowSameSlot;
+}
+
+/** その人の同じ日の割り当てのうち、この枠とぶつかるものの位置。 */
+function conflictingIndices(
+  staffId: string,
+  slot: { day: number; taskId: string },
+  assignments: readonly Assignment[],
+  plan: Plan,
+  excludeIndex: number,
+): number[] {
+  const task = plan.tasksById.get(slot.taskId);
+  if (!task) return [];
+  const found: number[] = [];
+  for (let k = 0; k < assignments.length; k += 1) {
+    if (k === excludeIndex) continue;
+    const other = assignments[k];
+    if (!other || other.staffId !== staffId || other.day !== slot.day) continue;
+    const otherTask = plan.tasksById.get(other.taskId);
+    if (otherTask && conflictsWith(task, otherTask)) found.push(k);
+  }
+  return found;
+}
+
 function hasConflict(
   staffId: string,
   slot: { day: number; taskId: string },
@@ -97,24 +132,8 @@ function hasConflict(
   plan: Plan,
   excludeIndex: number,
 ): boolean {
-  const task = plan.tasksById.get(slot.taskId);
-  if (!task) return true;
-
-  for (let k = 0; k < assignments.length; k += 1) {
-    if (k === excludeIndex) continue;
-    const other = assignments[k];
-    if (!other || other.staffId !== staffId || other.day !== slot.day) continue;
-
-    const otherTask = plan.tasksById.get(other.taskId);
-    if (!otherTask) continue;
-
-    if (other.taskId === slot.taskId) return true;
-    if (task.avoidWith.includes(otherTask.taskId)) return true;
-    if (otherTask.avoidWith.includes(task.taskId)) return true;
-    if (task.exclusiveGroup && otherTask.exclusiveGroup === task.exclusiveGroup) return true;
-    if (otherTask.slot === task.slot && !task.allowSameSlot && !otherTask.allowSameSlot) return true;
-  }
-  return false;
+  if (!plan.tasksById.has(slot.taskId)) return true;
+  return conflictingIndices(staffId, slot, assignments, plan, excludeIndex).length > 0;
 }
 
 /** その人がその日その時間帯に、もう何か持っているか。掛け持ちの判定に使う。 */
@@ -319,12 +338,53 @@ export function totalCost(
     + unfilled * 1000;
 }
 
+/**
+ * 埋まらなかった枠を、1人の入れ替えで埋める。
+ *
+ * 貪欲は「担当できる人が少ない順」に当てるので、連絡帳のように書ける人が多い
+ * 業務は後回しになる。その間に、連絡帳を書ける人が手作業などに取られると、
+ * 人は足りているのに連絡帳だけが空く（看護師はバイタル、リーダーは連絡帳を持てない）。
+ * そこで、空いた枠に入れる人の「ぶつかる割り当て」をほかの空いている人へ渡せるなら渡す。
+ */
+function repairUnfilled(result: Assignment[], plan: Plan): void {
+  for (let i = 0; i < result.length; i += 1) {
+    const slot = result[i] as Assignment;
+    const task = plan.tasksById.get(slot.taskId);
+    if (slot.staffId || !task) continue;
+    const working = plan.workingByDay.get(slot.day) ?? [];
+
+    working.some((staffId) => {
+      if (!isPresent(staffId, slot.day, task.slot, plan) || !isEligible(staffId, task, plan)) return false;
+      const blocking = conflictingIndices(staffId, slot, result, plan, i);
+      if (blocking.length !== 1) return false;
+      const k = blocking[0] as number;
+      const other = result[k] as Assignment;
+
+      return working.some((substitute) => {
+        if (substitute === staffId) return false;
+        const trial = [...result];
+        trial[k] = { ...other, staffId: substitute };
+        trial[i] = { ...slot, staffId };
+        if (!canAssign(substitute, other, trial, plan, k) || !canAssign(staffId, slot, trial, plan, i)) return false;
+        result[k] = trial[k] as Assignment;
+        result[i] = trial[i] as Assignment;
+        return true;
+      });
+    });
+  }
+}
+
 /** 貪欲割り当て。各枠でその時点の負担が最も軽い候補を選ぶ。 */
 function greedyAssign(plan: Plan, settings: AssignSettings, seed: number): Assignment[] {
   const load = initLoad(plan);
   const result: Assignment[] = [];
+  // 人が余った日だけの枠（フリー）は plan.slots の最後に並ぶ。その手前で穴埋めをして、
+  // 決まった業務の空きを先に埋め切る。
+  const firstOptional = plan.slots.findIndex((slot) => isOptionalTask(plan.tasksById.get(slot.taskId)));
+  const repairAt = firstOptional === -1 ? plan.slots.length : firstOptional;
 
   plan.slots.forEach((slot, slotIndex) => {
+    if (slotIndex === repairAt) repairUnfilled(result, plan);
     // 未確定の枠も先に置く。hasConflict が走査できるようにするため。
     result.push({
       day: slot.day, taskId: slot.taskId, index: slot.index, staffId: '', weekday: slot.weekday,
@@ -369,6 +429,7 @@ function greedyAssign(plan: Plan, settings: AssignSettings, seed: number): Assig
       day: slot.day, taskId: slot.taskId, index: slot.index, staffId: bestStaff, weekday: slot.weekday,
     };
   });
+  if (repairAt === plan.slots.length) repairUnfilled(result, plan);
 
   return result;
 }
@@ -430,9 +491,12 @@ export interface AssignResult {
 export function runAssignment(plan: Plan, settings: AssignSettings, seed: number): AssignResult {
   const greedy = greedyAssign(plan, settings, seed);
   const improved = improve(greedy, plan, settings, seed);
+  // 人が余った日だけの枠（最低人数 0）は、埋まらなければ立てない。人数の見積もりでは
+  // 埋まるはずでも、同じ日の組み合わせの決まりで人が残らないことがあるため。
+  const kept = improved.filter((a) => a.staffId || !isOptionalTask(plan.tasksById.get(a.taskId)));
   return {
-    assignments: improved,
-    cost: Math.round(totalCost(improved, plan, settings) * 1000) / 1000,
+    assignments: kept,
+    cost: Math.round(totalCost(kept, plan, settings) * 1000) / 1000,
     seed,
   };
 }
