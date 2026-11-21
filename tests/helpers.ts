@@ -52,6 +52,7 @@ export function task(overrides: Partial<Task> & { taskId: string; name: string }
     note: '',
     derive: '',
     fixedStaffId: '',
+    shareWhenShort: false,
     ...overrides,
   };
 }

@@ -54,7 +54,7 @@ function restSeats(
     .filter((a) => a.day === day && a.staffId && plan.tasksById.get(a.taskId)?.slot === task.slot)
     .map((a) => a.staffId));
   return presentStaff(plan.workingByDay.get(day) ?? [], day, task.slot, plan.presence)
-    .filter((staffId) => !busy.has(staffId));
+    .filter((staffId) => !busy.has(staffId) && plan.capable.get(task.taskId)?.has(staffId) === true);
 }
 
 export function deriveAssignments(plan: Plan, assignments: readonly SeatAssignment[]): SeatAssignment[] {

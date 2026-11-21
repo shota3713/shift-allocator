@@ -59,6 +59,8 @@ export interface ShiftType {
   readonly pm: Presence;
   /** 始業時刻（'7:30' など）。空なら表に出さない。 */
   readonly startTime?: string;
+  /** 終業時刻（'16:30' など）。空なら始業だけを出す。 */
+  readonly endTime?: string;
 }
 
 /** 業務の適用対象。曜日指定はカンマ区切りの WeekdayKey。 */
@@ -108,6 +110,12 @@ export interface Task {
   readonly derive: TaskDerive;
   /** derive が 'fixed' のときの担当。実名はリポジトリに置かず、端末で選ぶ。 */
   readonly fixedStaffId: string;
+  /**
+   * 最低人数（minHeadcount）の枠さえ埋まらない日に、同じ時間帯のほかの業務の人が
+   * 掛け持ちで入ってよいか。手作業のように「空きにするよりは兼任で回す」業務だけ true。
+   * avoidWith の業務の人には乗せない。
+   */
+  readonly shareWhenShort: boolean;
 }
 
 export type TaskDerive = '' | 'rest' | 'fixed' | `follow:${string}`;
@@ -116,9 +124,12 @@ export function isDerivedTask(task: Pick<Task, 'derive'>): boolean {
   return task.derive !== '';
 }
 
-/** 人が余った日だけ立てる業務か（最低人数 0。午前・午後フリー）。 */
-export function isOptionalTask(task: Pick<Task, 'minHeadcount'> | undefined): boolean {
-  return task?.minHeadcount === 0;
+/**
+ * 最低人数を超える枠か（手作業の2人目・リハの2人目・フリー）。
+ * 人が足りなければ立てない枠なので、ほかの業務の決まった枠より後に当てる。
+ */
+export function isSpareSeat(task: Pick<Task, 'minHeadcount'> | undefined, index: number): boolean {
+  return task !== undefined && index >= task.minHeadcount;
 }
 
 export const RULE_TYPE = {
@@ -182,7 +193,10 @@ export interface Plan {
   readonly staffNames: ReadonlyMap<string, string>;
   /** staffId → 日 → その日の在所。半日単位の可否はここだけで決まる。 */
   readonly presence: ReadonlyMap<string, ReadonlyMap<number, DayPresence>>;
-  /** taskId → 担当できる staffId。職種の初期値と個人の設定を合わせた結果。 */
+  /**
+   * taskId → 担当できる staffId。職種の初期値と個人の設定を合わせた結果。
+   * ほかから決まる業務（derivedTasks）の分も入る。
+   */
   readonly capable: ReadonlyMap<string, ReadonlySet<string>>;
   readonly rules: readonly LearnedRule[];
   /** ほかの結果から決まる業務（朝の連絡帳・洗面・夕方清掃）。slots には入らない。 */
@@ -204,6 +218,9 @@ export interface AttendanceEntry {
   readonly code: string;
   readonly kind: ShiftKind;
   readonly startTime: string;
+  readonly endTime: string;
+  /** ドライバー（職種か、送迎の区分）。出勤の欄で別の行にまとめる。 */
+  readonly driver: boolean;
   /**
    * planned: 勤務表どおり / changed: 当日の配置で区分を変えた /
    * added: 予定になかったが当日来た / absent: 予定はあったが当日いない /

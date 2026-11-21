@@ -292,6 +292,7 @@ function openTaskPicker(ctx: Ctx): void {
     note: '',
     derive: '',
     fixedStaffId: '',
+    shareWhenShort: false,
   };
 
   const close = openSheet({

@@ -52,14 +52,15 @@ export interface WeekRow {
 export interface AttendanceCell {
   readonly name: string;
   readonly startTime: string;
+  readonly endTime: string;
   readonly status: AttendanceEntry['status'];
   readonly role: string;
 }
 
 /** 出勤の欄の1行。勤務区分（早番・日勤・遅番…）ごとに分ける。 */
 export interface AttendanceRow {
-  /** 'ABSENT' は予定はあったが当日いない人。 */
-  readonly kind: ShiftKind | 'ABSENT';
+  /** 'ABSENT' は予定はあったが当日いない人、'DRIVER' はドライバー。 */
+  readonly kind: AttendanceGroup;
   readonly label: string;
   /** 月の外は null。 */
   readonly cells: readonly (readonly AttendanceCell[] | null)[];
@@ -92,30 +93,49 @@ function weekColumns(year: number, month: number): WeekColumn[][] {
   return weeks;
 }
 
-/** 出勤の行の並び。早く来る区分から。SSヘルプと当日いない人は下にまとめる。 */
-const ATTENDANCE_ORDER: readonly (ShiftKind | 'ABSENT')[] = [
-  'EARLY', 'NURSE', 'DAY', 'AM_ONLY', 'PM_ONLY', 'LATE', 'FREE', 'SS_HELP', 'ABSENT',
+export type AttendanceGroup = ShiftKind | 'ABSENT' | 'DRIVER';
+
+/**
+ * 出勤の行の並び。早く来る区分から。ドライバーは送迎の担当なので介助の人と
+ * 混ぜずに別の行にする。SSヘルプと当日いない人は下にまとめる。
+ */
+const ATTENDANCE_ORDER: readonly AttendanceGroup[] = [
+  'EARLY', 'NURSE', 'DAY', 'AM_ONLY', 'PM_ONLY', 'LATE', 'DRIVER', 'FREE', 'SS_HELP', 'ABSENT',
 ];
 
-function attendanceKind(entry: AttendanceEntry): ShiftKind | 'ABSENT' {
-  return entry.status === 'absent' ? 'ABSENT' : entry.kind;
+export function attendanceGroup(entry: AttendanceEntry): AttendanceGroup {
+  if (entry.status === 'absent') return 'ABSENT';
+  return entry.driver ? 'DRIVER' : entry.kind;
+}
+
+const GROUP_LABELS: Partial<Record<AttendanceGroup, string>> = {
+  ABSENT: '当日不在',
+  DRIVER: 'ドライバー',
+  // 勤務区分のフリー（F）は、業務の「午前フリー・午後フリー」と取り違えやすいので言い分ける。
+  FREE: 'フリー勤務',
+};
+
+/** 勤務時間を「7:30〜16:30」の形に。終業が無ければ始業だけ。 */
+export function formatHours(startTime: string, endTime: string): string {
+  if (startTime && endTime) return `${startTime}〜${endTime}`;
+  return startTime;
 }
 
 /** その週に1人でもいる区分だけ行にする。空の行が並ぶと紙が足りなくなる。 */
 function buildAttendanceRows(plan: Plan, columns: readonly WeekColumn[]): AttendanceRow[] {
   const inWeek = columns.flatMap((c) => (c.day === null ? [] : plan.attendance.get(c.day) ?? []));
-  const kinds = new Set(inWeek.map(attendanceKind));
+  const kinds = new Set(inWeek.map(attendanceGroup));
   return ATTENDANCE_ORDER.filter((kind) => kinds.has(kind)).map((kind) => ({
     kind,
-    // 勤務区分のフリー（F）は、業務の「午前フリー・午後フリー」と取り違えやすいので言い分ける。
-    label: kind === 'ABSENT' ? '当日不在' : kind === 'FREE' ? 'フリー勤務' : SHIFT_KIND_LABELS[kind],
+    label: GROUP_LABELS[kind] ?? SHIFT_KIND_LABELS[kind as ShiftKind],
     cells: columns.map((column) => {
       if (column.day === null) return null;
       return (plan.attendance.get(column.day) ?? [])
-        .filter((entry) => attendanceKind(entry) === kind)
+        .filter((entry) => attendanceGroup(entry) === kind)
         .map((entry) => ({
           name: entry.name,
           startTime: entry.startTime,
+          endTime: entry.endTime,
           status: entry.status,
           role: entry.role,
         }));

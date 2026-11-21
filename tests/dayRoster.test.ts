@@ -15,7 +15,8 @@ import { buildPlan } from '../src/core/plan';
 import { guestStaffId } from '../src/core/roster';
 import { PRESENCE, SHIFT_KIND, readShiftCode } from '../src/core/shiftCode';
 import { DEFAULT_SETTINGS, SLOT, type Task } from '../src/core/types';
-import { buildWeeklySheets } from '../src/core/weekly';
+import { staleRun } from '../src/core/stale';
+import { buildWeeklySheets, formatHours } from '../src/core/weekly';
 import { importBackup, setRosterChange, type Database } from '../src/store/db';
 import { EARLY, databaseWith, staff, task } from './helpers';
 
@@ -189,11 +190,11 @@ describe('朝の受け入れ', () => {
     expect(derived.find((a) => a.day === 1 && a.taskId === 'MORNING_RENRAKU')?.staffId).toBe('e');
   });
 
-  test('表には設定の並び順で 食事・飲み物・連絡帳・洗面・バイタル と並ぶ', () => {
+  test('表には設定の並び順で 食事・飲み物・連絡帳・洗面・BP（バイタル） と並ぶ', () => {
     const { plan, assignments } = morning();
     const names = buildWeeklySheets(plan, assignments)[0]?.rows
       .filter((r) => r.slot === SLOT.MORNING).map((r) => r.name);
-    expect(names).toEqual(['食事', '飲み物', '連絡帳（朝）', '洗面', 'バイタル']);
+    expect(names).toEqual(['食事', '飲み物', '連絡帳（朝）', '洗面', 'BP（バイタル）']);
   });
 });
 
@@ -318,15 +319,123 @@ describe('週ごとの表', () => {
     });
     const withTimes: Database = {
       ...db,
-      shiftTypes: db.shiftTypes.map((t) => (t.code === EARLY.code ? { ...t, startTime: '7:30' } : t)),
+      shiftTypes: db.shiftTypes.map((t) => (t.code === EARLY.code ? { ...t, startTime: '7:30', endTime: '16:30' } : t)),
     };
     const { plan, assignments } = run(withTimes);
     const sheet = buildWeeklySheets(plan, assignments)[0];
 
     expect(sheet?.attendance.map((r) => r.label)).toEqual(['早番', '日勤']);
-    expect(sheet?.attendance[0]?.cells[1]).toEqual([{ name: '乙川', startTime: '7:30', status: 'planned', role: '' }]);
+    expect(sheet?.attendance[0]?.cells[1])
+      .toEqual([{ name: '乙川', startTime: '7:30', endTime: '16:30', status: 'planned', role: '' }]);
+    expect(formatHours('7:30', '16:30')).toBe('7:30〜16:30');
+    expect(formatHours('7:30', '')).toBe('7:30');
     expect(sheet?.attendance[1]?.cells[1]?.[0]?.name).toBe('タロ');
     expect(sheet?.rows[0]?.cells[1]?.length).toBe(1);
+  });
+});
+
+describe('ドライバー', () => {
+  test('職種がドライバーの人も送迎の区分の人も、出勤の欄で別の行にまとめる', () => {
+    const db = databaseWith({
+      period,
+      staff: [staff('a', '甲', CARE), staff('d1', '運転一', 'ドライバー'), staff('d2', '運転二', CARE)],
+      tasks: [BATH],
+      days: [1],
+      codes: { d2: { 1: '送迎_032DS' } },
+    });
+    const plan = buildPlan(db, period);
+    const sheet = buildWeeklySheets(plan, [])[0];
+
+    expect(sheet?.attendance.map((r) => r.label)).toEqual(['日勤', 'ドライバー']);
+    const drivers = sheet?.attendance.find((r) => r.kind === 'DRIVER')?.cells[1]?.map((c) => c.name);
+    expect(drivers).toEqual(['運転一', '運転二']);
+  });
+  test('洗面（残り全員）にはドライバーなど担当できない職種の人を入れない', () => {
+    const tasks = defaultTasks([CARE]).filter((t) => ['MORNING_MEAL', 'MORNING_WASH'].includes(t.taskId));
+    const db = databaseWith({
+      period,
+      staff: [staff('a', '甲', CARE), staff('b', '乙', CARE), staff('d1', '運転一', 'ドライバー')],
+      tasks,
+      days: [1],
+    });
+    const { plan, assignments } = run(db);
+    const wash = deriveAssignments(plan, assignments).filter((a) => a.taskId === 'MORNING_WASH').map((a) => a.staffId);
+    expect(wash).toHaveLength(1);
+    expect(wash).not.toContain('d1');
+  });
+});
+
+describe('手作業を空きにしない', () => {
+  const NURSE = '看護職員';
+  const pick = (ids: readonly string[]): Task[] => defaultTasks([CARE]).filter((t) => ids.includes(t.taskId));
+
+  test('2人目に入れる人がいなければ、その日は1人にして空きを出さない', () => {
+    // 看護師はバイタルで連絡帳を持てず、手作業もできない。人数だけ見れば3枠埋まるが実際は2枠。
+    const db = databaseWith({
+      period,
+      staff: [staff('n1', '看護一', NURSE), staff('c0', '介護0', CARE), staff('c1', '介護1', CARE)],
+      tasks: pick(['MORNING_VITAL', 'MORNING_RENRAKU', 'RENRAKU', 'HANDWORK']),
+      days: [1],
+    });
+    const { plan, assignments } = run(db);
+    const handwork = assignments.filter((a) => a.taskId === 'HANDWORK');
+
+    expect(handwork).toHaveLength(1);
+    expect(handwork[0]?.staffId).toMatch(/^c/);
+    expect(assignments.filter((a) => !a.staffId)).toEqual([]);
+    // 減らした枠は「設定と合っていない」とは言わない。
+    expect(staleRun(plan, { assignments }).missing).toEqual([]);
+  });
+
+  test('1人も入れない日は、連絡帳・レク以外の午後の業務の人が掛け持ちで入る', () => {
+    const db = databaseWith({
+      period,
+      staff: ['c0', 'c1', 'c2'].map((id) => staff(id, id, CARE)),
+      tasks: pick(['RENRAKU', 'REC_LEAD', 'REHA_PM', 'HANDWORK']),
+      days: [1],
+    });
+    const { assignments } = run(db);
+    const of = (taskId: string) => assignments.find((a) => a.taskId === taskId)?.staffId;
+
+    expect(assignments.filter((a) => !a.staffId)).toEqual([]);
+    expect(of('HANDWORK')).toBe(of('REHA_PM'));
+    expect(of('HANDWORK')).not.toBe(of('RENRAKU'));
+    expect(of('HANDWORK')).not.toBe(of('REC_LEAD'));
+  });
+});
+
+describe('あとから加わった標準の業務', () => {
+  const oldData = (extra: Record<string, unknown> = {}) => JSON.stringify({
+    tasks: [{ taskId: 'REHA_AM', name: 'リハ担当', slot: 'AM', headcount: 2, active: true }],
+    settings: {},
+    ...extra,
+  });
+
+  test('古い保存データには朝の受け入れ・フリー・夕方清掃を自動で足す', () => {
+    const restored = importBackup(oldData());
+    const ids = restored.tasks.map((t) => t.taskId);
+    expect(ids).toEqual(expect.arrayContaining([
+      'MORNING_MEAL', 'MORNING_DRINK', 'MORNING_RENRAKU', 'MORNING_WASH', 'MORNING_VITAL',
+      'FREE_AM', 'FREE_PM', 'EVENING_CLEAN',
+    ]));
+    expect(restored.settings.offeredBuiltIns).toContain('MORNING_MEAL');
+  });
+
+  test('一度足したあとで人が消した業務は、読み込み直しても戻さない', () => {
+    const restored = importBackup(oldData());
+    const removed = { ...restored, tasks: restored.tasks.filter((t) => t.taskId !== 'FREE_AM') };
+    const again = importBackup(JSON.stringify(removed));
+    expect(again.tasks.some((t) => t.taskId === 'FREE_AM')).toBe(false);
+    expect(again.tasks.filter((t) => t.taskId === 'MORNING_MEAL')).toHaveLength(1);
+  });
+
+  test('業務がまだ無いデータには足さない。旧い名前「バイタル」は BP（バイタル）に直す', () => {
+    expect(importBackup(JSON.stringify({ tasks: [], settings: {} })).tasks).toEqual([]);
+    const renamed = importBackup(JSON.stringify({
+      tasks: [{ taskId: 'MORNING_VITAL', name: 'バイタル', slot: 'MORNING', headcount: 2, active: true }],
+      settings: {},
+    }));
+    expect(renamed.tasks.find((t) => t.taskId === 'MORNING_VITAL')?.name).toBe('BP（バイタル）');
   });
 });
 

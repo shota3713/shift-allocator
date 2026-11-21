@@ -54,6 +54,8 @@
   --kind-free-wash: oklch(94% 0.005 250);
   --kind-ss: oklch(48% 0.14 150);
   --kind-ss-wash: oklch(93.5% 0.06 150);
+  --kind-drive: oklch(45% 0.08 200);
+  --kind-drive-wash: oklch(94% 0.03 200);
 
   --text-micro: 0.6875rem;
   --text-small: 0.8125rem;

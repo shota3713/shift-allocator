@@ -35,7 +35,7 @@ export function renderShiftTypes(root: HTMLElement, ctx: Ctx): void {
     el('p', { class: 'card__body', style: 'margin-bottom:var(--step-3)',
       text: 'フリーの半日には業務を割り振りません。「日/F」は午前だけ現場、「F」は1日フリーです。'
         + '末尾が SS の区分はショートステイへのヘルプで、デイの割り振りには入れません。'
-        + '始業の時刻を入れると、表の「出勤」の欄に出ます。' }),
+        + '始業・終業の時刻を入れると、表の「出勤」の欄で名前の横に出ます。' }),
     el('div', { class: 'rows' }, ...sorted.map((type) => renderRow(type, ctx))),
   );
 }
@@ -65,29 +65,34 @@ function renderRow(type: ShiftType, ctx: Ctx): HTMLElement {
   }, ...PRESENCE_PRESETS.map((option) =>
     el('option', { value: option.value, text: option.label, selected: option.value === preset })));
 
-  const start = el('input', {
+  const name = shiftCodeBase(type.code) || type.code;
+  const timeInput = (field: 'startTime' | 'endTime', label: string): HTMLInputElement => el('input', {
     type: 'time',
-    class: 'shift-start',
-    value: toTimeValue(type.startTime ?? ''),
-    'aria-label': `${type.code} の始業時刻`,
+    class: 'shift-time',
+    value: toTimeValue(type[field] ?? ''),
+    'aria-label': `${type.code} の${label}`,
     onchange: (event: Event) => {
       const value = fromTimeValue((event.currentTarget as HTMLInputElement).value);
       ctx.update((db) => ({
         ...db,
-        shiftTypes: db.shiftTypes.map((t) => (t.code === type.code ? { ...t, startTime: value } : t)),
+        shiftTypes: db.shiftTypes.map((t) => (t.code === type.code ? { ...t, [field]: value } : t)),
       }));
-      toast(value ? `${shiftCodeBase(type.code)} は ${value} からにしました。` : '始業時刻を消しました。');
+      toast(value ? `${name} の${label}を ${value} にしました。` : `${name} の${label}を消しました。`);
     },
   });
+  const hours = el('div', { class: 'shift-hours' },
+    timeInput('startTime', '始業時刻'),
+    el('span', { class: 'shift-hours__sep', text: '〜', 'aria-hidden': 'true' }),
+    timeInput('endTime', '終業時刻'));
 
   // SS の区分は設定に関わらずデイには入れない（plan.ts）。選べるように見せない。
   const ssHelp = parsed.kind === 'SS_HELP';
 
-  return el('div', { class: idle || ssHelp ? 'row row--3' : 'row row--3 row--active' },
+  return el('div', { class: idle || ssHelp ? 'row row--shift' : 'row row--shift row--active' },
     el('div', { class: 'row__main' },
-      el('span', { class: 'row__title', text: shiftCodeBase(type.code) || type.code }),
+      el('span', { class: 'row__title', text: name }),
       el('span', { class: 'row__note', text: parsed.assumed ? '形が読めないので確認してください' : parsed.label })),
-    start,
+    hours,
     ssHelp ? el('span', { class: 'pill attend-chip--SS_HELP', text: 'SSヘルプ' }) : select);
 }
 

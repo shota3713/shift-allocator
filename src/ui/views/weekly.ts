@@ -13,7 +13,14 @@
 import type { Ctx } from '../app';
 import { el } from '../dom';
 import { buildPlan } from '../../core/plan';
-import { buildWeeklySheets, type AttendanceCell, type WeekRow, type WeekSheet } from '../../core/weekly';
+import { isStale, staleRun } from '../../core/stale';
+import {
+  buildWeeklySheets,
+  formatHours,
+  type AttendanceCell,
+  type WeekRow,
+  type WeekSheet,
+} from '../../core/weekly';
 import { SLOT_LABELS, WEEKDAY_LABELS } from '../../core/types';
 import { PAPER_SIZES, dayNotesFor, setDayNote, updateDatabase, type PaperSize } from '../../store/db';
 
@@ -48,6 +55,29 @@ export function renderWeekly(root: HTMLElement, ctx: Ctx): void {
   const saveNote = (day: number, text: string): void => {
     updateDatabase((current) => setDayNote(current, period, day, text));
   };
+
+  const stale = staleRun(plan, run);
+  if (isStale(stale)) {
+    // 古い結果のまま刷ると、足した業務（朝の受け入れなど）が空のまま紙に出る。
+    root.append(
+      el('div', { class: 'notice notice--caution no-print' },
+        el('strong', { text: 'この表は、いまの業務の設定と合っていません。' }),
+        stale.missing.length > 0
+          ? el('span', { text: `${stale.missing.join('・')} がこの結果に入っていません。` })
+          : null,
+        stale.away.length > 0
+          ? el('span', { text: '当日の配置にいない人に業務が残っています。' })
+          : null,
+        el('span', { text: '割り振りの画面で「いまの設定で割り振り直す」を押してから保存してください。' })),
+      el('div', { class: 'actions no-print', style: 'margin-bottom:var(--step-4)' },
+        el('button', {
+          class: 'btn btn--primary',
+          type: 'button',
+          text: '割り振りの画面へ',
+          onclick: () => ctx.go('assign', { runId: run.runId }),
+        })),
+    );
+  }
 
   root.append(
     el('p', { class: 'weekly-lead no-print',
@@ -121,6 +151,24 @@ function rowEm(lines: number): number {
   return Math.max(1, lines) * LINE_EM + PAD_EM;
 }
 
+/**
+ * 出勤の欄の1日の欄に、1行で収まる文字幅の目安（全角1・半角0.55で数える）。
+ * 名前の横に勤務時間を付けると折り返すことがあるので、行数の見積もりに使う。
+ */
+const ATTEND_CHARS_PER_LINE = 12;
+
+function textWidth(text: string): number {
+  return [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) < 0x100 ? 0.55 : 1), 0);
+}
+
+function attendLines(cell: readonly AttendanceCell[] | null): number {
+  if (!cell) return 1;
+  return cell.reduce((sum, entry) => {
+    const width = textWidth(`${entry.name} ${formatHours(entry.startTime, entry.endTime)}`);
+    return sum + Math.max(1, Math.ceil(width / ATTEND_CHARS_PER_LINE));
+  }, 0);
+}
+
 function cellLines(row: WeekRow, names: readonly string[] | null): number {
   if (!names) return 1;
   return row.derive === 'rest' ? Math.ceil(names.length / NAMES_PER_LINE) : names.length;
@@ -133,7 +181,7 @@ function cellLines(row: WeekRow, names: readonly string[] | null): number {
 export function sheetEm(sheet: WeekSheet): number {
   const header = rowEm(1);
   const attendance = sheet.attendance
-    .reduce((sum, row) => sum + rowEm(Math.max(...row.cells.map((c) => c?.length ?? 1))), 0);
+    .reduce((sum, row) => sum + rowEm(Math.max(...row.cells.map(attendLines))), 0);
   const tasks = sheet.rows
     .reduce((sum, row) => sum + rowEm(Math.max(...row.cells.map((c) => cellLines(row, c)))), 0);
   const notes = rowEm(2);
@@ -192,8 +240,10 @@ function renderAttendCell(cell: readonly AttendanceCell[] | null): HTMLElement {
     ...cell.map((entry) => el('div', {
       class: `weekly-attend__entry weekly-attend__entry--${entry.status}`,
     },
-      entry.startTime ? el('span', { class: 'weekly-attend__time', text: entry.startTime }) : null,
       entry.name,
+      entry.startTime
+        ? el('span', { class: 'weekly-attend__time', text: formatHours(entry.startTime, entry.endTime) })
+        : null,
       entry.status === 'added' ? el('span', { class: 'weekly-attend__tag', text: '追加' }) : null,
       entry.status === 'changed' ? el('span', { class: 'weekly-attend__tag', text: '変更' }) : null)));
 }

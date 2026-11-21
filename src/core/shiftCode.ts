@@ -85,6 +85,11 @@ export function isShortStayCode(code: string): boolean {
   return SHORT_STAY_SUFFIX.test(normalizeText(code));
 }
 
+/** 送迎（運転）の区分か。ドライバーは出勤の欄で別の行にまとめる。 */
+export function isDriveCode(code: string): boolean {
+  return shiftCodeBase(code).split('/').some((token) => classify(token.trim()) === 'drive');
+}
+
 /** 事業所コードを落とした本体を返す。 */
 export function shiftCodeBase(code: string): string {
   return normalizeText(code).replace(SITE_SUFFIX, '');

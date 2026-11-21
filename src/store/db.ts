@@ -10,7 +10,7 @@
  */
 
 import { DEFAULT_DIFFICULTY, difficultyFromWeight, isDifficultyLevel } from '../core/difficulty';
-import { defaultTasks } from '../core/masters';
+import { LATER_BUILT_INS, RENAMED_BUILT_INS, defaultTasks } from '../core/masters';
 import { PRESENCE, readShiftCode } from '../core/shiftCode';
 import { migrateSkills, type StaffSkills } from '../core/skills';
 import type { LearnedRule, ShiftType, Staff, Task, TaskDerive } from '../core/types';
@@ -121,6 +121,11 @@ export interface AppSettings {
   readonly seed: number;
   /** 週ごとの表を印刷する用紙。どちらも横向き。 */
   readonly paperSize: PaperSize;
+  /**
+   * あとから標準に加わった業務のうち、もう足したもの。消した業務を
+   * 読み込みのたびに足し直さないための控え。
+   */
+  readonly offeredBuiltIns: readonly string[];
 }
 
 export interface Database {
@@ -150,6 +155,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   improvementPasses: 5000,
   seed: 20260912,
   paperSize: 'A4',
+  offeredBuiltIns: [],
 };
 
 export function emptyDatabase(): Database {
@@ -184,6 +190,7 @@ function normalizeShiftType(type: ShiftType): ShiftType {
     am: off ? PRESENCE.OFF : type.am ?? parsed.am,
     pm: off ? PRESENCE.OFF : type.pm ?? parsed.pm,
     startTime: typeof type.startTime === 'string' ? type.startTime : '',
+    endTime: typeof type.endTime === 'string' ? type.endTime : '',
   };
 }
 
@@ -203,8 +210,11 @@ function normalizeTask(task: Task): Task {
   const headcount = Math.max(1, Number(task.headcount) || 1);
   const withWeight = task as Task & { weight?: unknown };
 
+  const renamed = builtIn && RENAMED_BUILT_INS[task.taskId]?.includes(task.name);
+
   return {
     ...task,
+    name: renamed ? builtIn.name : task.name,
     headcount,
     difficulty: isDifficultyLevel(task.difficulty)
       ? task.difficulty
@@ -226,6 +236,31 @@ function normalizeTask(task: Task): Task {
     // 決まり方も画面から触れないので組み込みを正とする。担当の人だけは端末で選ぶ。
     derive: builtIn ? builtIn.derive : isTaskDerive(task.derive) ? task.derive : '',
     fixedStaffId: typeof task.fixedStaffId === 'string' ? task.fixedStaffId : '',
+    shareWhenShort: builtIn ? builtIn.shareWhenShort : task.shareWhenShort === true,
+  };
+}
+
+/**
+ * あとから標準に加わった業務を、古い保存データに一度だけ足す。
+ * 業務がまだ1つも無いデータには足さない（「標準の業務を作る」で全部そろう）。
+ * 一度足したものは控えに残し、人が消したあとで足し直さない。
+ */
+function withLaterBuiltIns(
+  tasks: readonly Task[],
+  settings: AppSettings,
+): { tasks: readonly Task[]; offered: readonly string[] } {
+  if (tasks.length === 0) return { tasks, offered: settings.offeredBuiltIns };
+  const present = new Set(tasks.map((t) => t.taskId));
+  const offered = new Set(settings.offeredBuiltIns);
+  const added = defaultTasks(settings.careJobs)
+    .filter((t) => LATER_BUILT_INS.includes(t.taskId) && !present.has(t.taskId) && !offered.has(t.taskId));
+  return {
+    tasks: [...tasks, ...added],
+    offered: [...new Set([
+      ...offered,
+      ...LATER_BUILT_INS.filter((id) => present.has(id)),
+      ...added.map((t) => t.taskId),
+    ])],
   };
 }
 
@@ -251,6 +286,9 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
   return {
     ...merged,
     paperSize: (PAPER_SIZES as readonly string[]).includes(merged.paperSize) ? merged.paperSize : 'A4',
+    offeredBuiltIns: Array.isArray(merged.offeredBuiltIns)
+      ? merged.offeredBuiltIns.filter((id): id is string => typeof id === 'string')
+      : [],
   };
 }
 
@@ -260,7 +298,8 @@ function normalize(raw: unknown): Database {
   if (typeof raw !== 'object' || raw === null) return base;
   const value = raw as Partial<Database>;
   const list = <T,>(v: unknown): readonly T[] => (Array.isArray(v) ? (v as T[]) : []);
-  const tasks = list<Task>(value.tasks).map(normalizeTask);
+  const settings = normalizeSettings(value.settings);
+  const { tasks, offered } = withLaterBuiltIns(list<Task>(value.tasks).map(normalizeTask), settings);
   return {
     version: 2,
     staff: list<Staff>(value.staff),
@@ -284,7 +323,7 @@ function normalize(raw: unknown): Database {
         job: typeof g.job === 'string' ? g.job : '',
         code: typeof g.code === 'string' ? g.code : '',
       })),
-    settings: normalizeSettings(value.settings),
+    settings: { ...settings, offeredBuiltIns: offered },
   };
 }
 

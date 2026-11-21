@@ -121,6 +121,7 @@ thead .weekly-table__task { background: var(--surface-sunken); }
 .weekly-attend--FREE,
 .weekly-attend--ABSENT { --kind: var(--kind-free); --kind-wash: var(--kind-free-wash); }
 .weekly-attend--SS_HELP { --kind: var(--kind-ss); --kind-wash: var(--kind-ss-wash); }
+.weekly-attend--DRIVER { --kind: var(--kind-drive); --kind-wash: var(--kind-drive-wash); }
 .weekly-attend + .weekly-attend > * { border-top: 1.5px solid var(--kind, var(--rule)); }
 
 .weekly-attend__time {
@@ -128,7 +129,9 @@ thead .weekly-table__task { background: var(--surface-sunken); }
   font-size: 0.9em;
   font-weight: 700;
   color: var(--kind, var(--ink-soft));
-  margin-right: 0.3em;
+  margin-left: 0.35em;
+  /* 時刻の途中では折り返さない。名前と時刻の間でだけ折り返す。 */
+  white-space: nowrap;
 }
 .weekly-attend__tag {
   margin-left: 0.3em;

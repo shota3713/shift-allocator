@@ -375,6 +375,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .attend-chip--ABSENT,
 .attend-chip--OFF { --kind: var(--kind-free); --kind-wash: var(--kind-free-wash); }
 .attend-chip--SS_HELP { --kind: var(--kind-ss); --kind-wash: var(--kind-ss-wash); }
+.attend-chip--DRIVER { --kind: var(--kind-drive); --kind-wash: var(--kind-drive-wash); }
 
 .attend-list { display: flex; flex-wrap: wrap; gap: var(--step-1) var(--step-2); }
 .attend-chip {
@@ -389,7 +390,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
   font-size: var(--text-small);
 }
 .attend-chip--ABSENT { text-decoration: line-through; color: var(--ink-faint); }
-.attend-chip__time { font-family: var(--font-figure); font-weight: 700; color: var(--kind, var(--ink-soft)); }
+.attend-chip__time {
+  font-family: var(--font-figure);
+  font-size: 0.92em;
+  font-weight: 700;
+  color: var(--kind, var(--ink-soft));
+  white-space: nowrap;
+}
 .pill.attend-chip--SS_HELP { background: var(--kind-ss-wash); color: var(--kind-ss); }
 
 /* ほかの結果から決まる業務の行。押して直せないので、ボタンの行と見分ける。 */
@@ -431,12 +438,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .roster-row--PM_ONLY { --kind: var(--kind-half); }
 .roster-row--FREE { --kind: var(--kind-free); }
 .roster-row--SS_HELP { --kind: var(--kind-ss); }
+.roster-row--DRIVER { --kind: var(--kind-drive); }
 .roster-row__controls { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--step-2); }
 .roster-row__controls select,
 .roster-add select,
 .roster-add input,
 .staff-short,
-.shift-start {
+.shift-time {
   min-height: 36px;
   padding: var(--step-1) var(--step-2);
   border: 1px solid var(--line-strong);
@@ -446,7 +454,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .roster-add { display: flex; flex-wrap: wrap; gap: var(--step-2); margin-top: var(--step-2); }
 .roster-add input { flex: 1 1 10rem; min-width: 0; }
 .staff-short { width: 7.5rem; }
-.shift-start { width: 7rem; }
+.shift-time { width: 6.5rem; }
+.shift-hours { display: flex; align-items: center; gap: var(--step-1); }
+/* 勤務区分の行。広い画面では「名前 | 時刻 | 在所」を1行、狭い画面では縦に積む。 */
+.row--shift { grid-template-columns: 1fr auto auto; }
+@media (max-width: 640px) {
+  .row--shift { grid-template-columns: 1fr; justify-items: start; }
+}
+.shift-hours__sep { color: var(--ink-faint); }
 
 /* ── 入力 ────────────────────────────────── */
 

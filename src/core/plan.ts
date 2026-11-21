@@ -14,14 +14,14 @@ import { maxMatching } from './feasibility';
 import { difficultyFromWeight, isDifficultyLevel, weightOf } from './difficulty';
 import { actualEntries, guestStaffId } from './roster';
 import { buildCapableMap } from './skills';
-import { PRESENCE, SHIFT_KIND, readShiftCode, type Presence, type ShiftKind } from './shiftCode';
+import { PRESENCE, SHIFT_KIND, isDriveCode, readShiftCode, type Presence, type ShiftKind } from './shiftCode';
 import {
   SLOT,
   SLOT_ORDER,
   WEEKDAY_KEYS,
   displayNameOf,
   isDerivedTask,
-  isOptionalTask,
+  isSpareSeat,
   type AttendanceEntry,
   type DayPresence,
   type LearnedRule,
@@ -110,10 +110,20 @@ const KIND_RANK: Record<ShiftKind, number> = {
   EARLY: 0, NURSE: 1, DAY: 2, AM_ONLY: 3, PM_ONLY: 4, LATE: 5, FREE: 6, SS_HELP: 7, OFF: 8,
 };
 
+/** ドライバーは遅番の後、フリー勤務の前にまとめる。 */
+const DRIVER_RANK = 5.5;
+
+function attendanceRank(entry: AttendanceEntry): number {
+  return entry.driver ? DRIVER_RANK : KIND_RANK[entry.kind];
+}
+
+/** 職種がドライバーか。職種名は事業所ごとに揺れるので、語で拾う。 */
+const DRIVER_JOB = /ドライバー|運転|送迎/u;
+
 function compareAttendance(a: AttendanceEntry, b: AttendanceEntry): number {
   const absent = Number(a.status === 'absent') - Number(b.status === 'absent');
   if (absent !== 0) return absent;
-  if (KIND_RANK[a.kind] !== KIND_RANK[b.kind]) return KIND_RANK[a.kind] - KIND_RANK[b.kind];
+  if (attendanceRank(a) !== attendanceRank(b)) return attendanceRank(a) - attendanceRank(b);
   if (a.startTime !== b.startTime) return a.startTime < b.startTime ? -1 : 1;
   return a.staffId < b.staffId ? -1 : a.staffId > b.staffId ? 1 : 0;
 }
@@ -137,6 +147,7 @@ function normalizeTaskForPlan(t: Task): Task {
     allowSameSlot: t.allowSameSlot === true,
     derive: t.derive ?? '',
     fixedStaffId: t.fixedStaffId ?? '',
+    shareWhenShort: t.shareWhenShort === true,
   };
 }
 
@@ -231,6 +242,7 @@ export function buildPlan(db: Database, periodKey: string): Plan {
 
   const known = codeMeanings(db);
   const startTimes = new Map(db.shiftTypes.map((t) => [t.code, t.startTime ?? '']));
+  const endTimes = new Map(db.shiftTypes.map((t) => [t.code, t.endTime ?? '']));
 
   const presence = new Map<string, Map<number, DayPresence>>();
   const workingByStaff = new Map<string, Set<number>>();
@@ -264,6 +276,8 @@ export function buildPlan(db: Database, periodKey: string): Plan {
       code: entry.code,
       kind: meaning.kind,
       startTime: startTimes.get(entry.code) ?? '',
+      endTime: endTimes.get(entry.code) ?? '',
+      driver: DRIVER_JOB.test(staffJob.get(entry.staffId) ?? '') || isDriveCode(entry.code),
       status: entry.status,
       role: entry.role,
     });
@@ -302,9 +316,11 @@ export function buildPlan(db: Database, periodKey: string): Plan {
   const tasksById = new Map([...tasks, ...derivedTasks].map((t) => [t.taskId, t]));
   const staffIds = [...workingByStaff.keys()].sort();
 
+  // ほかから決まる業務（洗面など）も、担当できる人を持っておく。「残り全員」に
+  // ドライバーのような担当しない職種の人を混ぜないため。
   const capable = buildCapableMap(
     staffIds.map((staffId) => ({ staffId, job: staffJob.get(staffId) ?? '' })),
-    tasks,
+    [...tasks, ...derivedTasks],
     db.skills,
   );
 
@@ -344,11 +360,11 @@ export function buildPlan(db: Database, periodKey: string): Plan {
     }
   }
 
-  // 「人が余った日だけ」の枠（午前・午後フリー）は最後に当てる。担当できる人の数で
-  // 並べると先に来てしまい、連絡帳などに回すはずの人をフリーに取られる。
-  const optional = (slot: SlotRequest): number => (isOptionalTask(tasksById.get(slot.taskId)) ? 1 : 0);
+  // 最低人数を超える枠（手作業の2人目・フリーなど）は、どの業務の決まった枠よりも後に当てる。
+  // 担当できる人の数で並べると先に来てしまい、連絡帳などに回すはずの人を取られる。
+  const spare = (slot: SlotRequest): number => (isSpareSeat(tasksById.get(slot.taskId), slot.index) ? 1 : 0);
   slots.sort((a, b) => {
-    if (optional(a) !== optional(b)) return optional(a) - optional(b);
+    if (spare(a) !== spare(b)) return spare(a) - spare(b);
     const ca = eligibleCount.get(a.taskId) ?? 0;
     const cb = eligibleCount.get(b.taskId) ?? 0;
     if (ca !== cb) return ca - cb;

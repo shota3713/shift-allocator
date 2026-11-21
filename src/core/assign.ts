@@ -20,7 +20,7 @@
 import { weightOf } from './difficulty';
 import {
   RULE_TYPE,
-  isOptionalTask,
+  isSpareSeat,
   type Assignment,
   type DayPresence,
   type AssignSettings,
@@ -378,10 +378,10 @@ function repairUnfilled(result: Assignment[], plan: Plan): void {
 function greedyAssign(plan: Plan, settings: AssignSettings, seed: number): Assignment[] {
   const load = initLoad(plan);
   const result: Assignment[] = [];
-  // 人が余った日だけの枠（フリー）は plan.slots の最後に並ぶ。その手前で穴埋めをして、
-  // 決まった業務の空きを先に埋め切る。
-  const firstOptional = plan.slots.findIndex((slot) => isOptionalTask(plan.tasksById.get(slot.taskId)));
-  const repairAt = firstOptional === -1 ? plan.slots.length : firstOptional;
+  // 最低人数を超える枠（手作業の2人目・フリーなど）は plan.slots の最後に並ぶ。
+  // その手前で穴埋めをして、決まった枠の空きを先に埋め切る。
+  const firstSpare = plan.slots.findIndex((slot) => isSpareSeat(plan.tasksById.get(slot.taskId), slot.index));
+  const repairAt = firstSpare === -1 ? plan.slots.length : firstSpare;
 
   plan.slots.forEach((slot, slotIndex) => {
     if (slotIndex === repairAt) repairUnfilled(result, plan);
@@ -481,6 +481,78 @@ function improve(
   return current;
 }
 
+/** 掛け持ちで入ってよいか。ぶつかる相手が「同じ時間帯のほかの業務」だけなら入れる。 */
+function canShare(
+  staffId: string,
+  seat: Assignment,
+  assignments: readonly Assignment[],
+  plan: Plan,
+  excludeIndex: number,
+): boolean {
+  const task = plan.tasksById.get(seat.taskId);
+  if (!task) return false;
+  if (!isPresent(staffId, seat.day, task.slot, plan) || !isEligible(staffId, task, plan)) return false;
+  return conflictingIndices(staffId, seat, assignments, plan, excludeIndex).every((k) => {
+    const other = plan.tasksById.get((assignments[k] as Assignment).taskId);
+    return other !== undefined
+      && other.slot === task.slot
+      && other.taskId !== task.taskId
+      && !task.avoidWith.includes(other.taskId)
+      && !other.avoidWith.includes(task.taskId)
+      && !(task.exclusiveGroup && other.exclusiveGroup === task.exclusiveGroup);
+  });
+}
+
+/**
+ * 埋まらなかった枠の後始末。
+ *
+ * 人数の見積もり（plan.ts の fitHeadcounts）は人数と担当できるかだけを見るので、
+ * 「連絡帳とリーダーは同じ人にしない」のような同じ日の決まりで、実際には
+ * 入れる人が残らない枠ができる。そのまま「空き」で出すと、現場では人が
+ * 足りないのか割り振りの都合なのか分からない。そこで:
+ *   - 最低人数を超える枠（手作業の2人目、フリー）は、埋まらなければ立てない
+ *   - 最低人数の枠が埋まらず、掛け持ちを許した業務（手作業）なら、同じ時間帯の
+ *     ほかの業務の人に兼任してもらう
+ * それでも埋まらない枠だけが「空き」で残る。
+ */
+function settleShortSeats(assignments: readonly Assignment[], plan: Plan): Assignment[] {
+  const result = [...assignments];
+  const groups = new Map<string, number[]>();
+  result.forEach((a, i) => {
+    const key = `${a.day}#${a.taskId}`;
+    groups.set(key, [...(groups.get(key) ?? []), i]);
+  });
+
+  const drop = new Set<number>();
+  for (const indices of groups.values()) {
+    const task = plan.tasksById.get((result[indices[0] as number] as Assignment).taskId);
+    if (!task) continue;
+    const empty = indices.filter((i) => !(result[i] as Assignment).staffId);
+    let filled = indices.length - empty.length;
+
+    for (const i of empty) {
+      const seat = result[i] as Assignment;
+      if (filled >= task.minHeadcount) {
+        drop.add(i);
+        continue;
+      }
+      if (!task.shareWhenShort) continue;
+      const helper = (plan.workingByDay.get(seat.day) ?? [])
+        .filter((staffId) => canShare(staffId, seat, result, plan, i))
+        .sort((a, b) => sameDayLoad(result, a, seat.day) - sameDayLoad(result, b, seat.day) || (a < b ? -1 : 1))[0];
+      if (!helper) continue;
+      result[i] = { ...seat, staffId: helper };
+      filled += 1;
+    }
+  }
+  return result.filter((_, i) => !drop.has(i));
+}
+
+/** その人がその日に持っている業務の数。掛け持ちを頼む人は、手の空いている人から。 */
+function sameDayLoad(assignments: readonly Assignment[], staffId: string, day: number): number {
+  return assignments.filter((a) => a.staffId === staffId && a.day === day).length;
+}
+
 export interface AssignResult {
   readonly assignments: readonly Assignment[];
   readonly cost: number;
@@ -491,9 +563,7 @@ export interface AssignResult {
 export function runAssignment(plan: Plan, settings: AssignSettings, seed: number): AssignResult {
   const greedy = greedyAssign(plan, settings, seed);
   const improved = improve(greedy, plan, settings, seed);
-  // 人が余った日だけの枠（最低人数 0）は、埋まらなければ立てない。人数の見積もりでは
-  // 埋まるはずでも、同じ日の組み合わせの決まりで人が残らないことがあるため。
-  const kept = improved.filter((a) => a.staffId || !isOptionalTask(plan.tasksById.get(a.taskId)));
+  const kept = settleShortSeats(improved, plan);
   return {
     assignments: kept,
     cost: Math.round(totalCost(kept, plan, settings) * 1000) / 1000,

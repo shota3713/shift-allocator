@@ -39,6 +39,7 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
       allowSameSlot?: boolean;
       avoidWith?: readonly string[];
       derive?: TaskDerive;
+      shareWhenShort?: boolean;
       note?: string;
     } = {},
   ): Task => ({
@@ -58,6 +59,7 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     note: options.note ?? '',
     derive: options.derive ?? '',
     fixedStaffId: '',
+    shareWhenShort: options.shareWhenShort ?? false,
   });
 
   return [
@@ -73,7 +75,7 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
       derive: 'rest',
       note: '朝にいて、食事・飲み物・連絡帳・バイタルを持たない人全員が入ります',
     }),
-    row('MORNING_VITAL', 'バイタル', SLOT.MORNING, 2, 2, [nurse], {
+    row('MORNING_VITAL', 'BP（バイタル）', SLOT.MORNING, 2, 2, [nurse], {
       minHeadcount: 1,
       note: '看護師が1人しか来ていない日は1人にします',
     }),
@@ -110,9 +112,13 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
       note: '空いている人が優先。いなければ連絡帳・レク以外の人が兼任します',
     }),
     row('REHA_PM', 'PMリハ', SLOT.PM, 3, 1, care),
+    // 手作業は空きにしない。人が少ない日は1人に減らし、それでも入れる人がいない日は
+    // 連絡帳・レク以外の午後の業務の人が掛け持ちで入る。
     row('HANDWORK', '手作業', SLOT.PM, 2, 2, care, {
       minHeadcount: 1,
-      note: '午後に人が少ない日は1人に減らします',
+      shareWhenShort: true,
+      avoidWith: ['RENRAKU', 'REC_LEAD'],
+      note: '午後に人が少ない日は1人に減らします。1人も入れない日は、連絡帳・レク以外の午後の業務の人が兼任します',
     }),
     row('FREE_PM', '午後フリー', SLOT.PM, 1, 1, care, {
       minHeadcount: 0,
@@ -125,6 +131,20 @@ export function defaultTasks(careJobs: readonly string[]): Task[] {
     }),
   ];
 }
+
+/**
+ * あとから標準に加わった業務。古い保存データには一度だけ自動で足す（store/db.ts）。
+ * 「まとめて足す」を押してもらう形では現場に届かなかったため。
+ */
+export const LATER_BUILT_INS: readonly string[] = [
+  'MORNING_MEAL', 'MORNING_DRINK', 'MORNING_RENRAKU', 'MORNING_WASH', 'MORNING_VITAL',
+  'FREE_AM', 'FREE_PM', 'EVENING_CLEAN',
+];
+
+/** 組み込みの業務の旧い名前。保存データがこの名前のままなら、いまの名前に直す。 */
+export const RENAMED_BUILT_INS: Readonly<Record<string, readonly string[]>> = {
+  MORNING_VITAL: ['バイタル'],
+};
 
 /** 休みを表す組み込みの区分。空欄はここに落ちる。 */
 export function defaultShiftTypes(): ShiftType[] {

@@ -13,6 +13,7 @@ import { el, openSheet, toast } from '../dom';
 import { attendingFor, buildPlan, weekdayOf } from '../../core/plan';
 import { defaultWorkCode, guestStaffId, plannedCodeOf } from '../../core/roster';
 import { SHIFT_KIND_LABELS, isShortStayCode, shiftCodeBase } from '../../core/shiftCode';
+import { attendanceGroup, formatHours } from '../../core/weekly';
 import { WEEKDAY_LABELS, type AttendanceEntry } from '../../core/types';
 import { GUEST_ROLES, newId, setRosterChange, type Database, type GuestRole } from '../../store/db';
 
@@ -27,10 +28,13 @@ const STATUS_LABELS: Record<AttendanceEntry['status'], string> = {
   guest: '',
 };
 
-/** 出勤の時刻と区分を1行で。例）早番 7:30（早_032DS） */
-export function describeShift(entry: Pick<AttendanceEntry, 'kind' | 'startTime' | 'code'>): string {
-  const time = entry.startTime ? ` ${entry.startTime}` : '';
-  return `${SHIFT_KIND_LABELS[entry.kind]}${time}（${shiftCodeBase(entry.code) || entry.code}）`;
+/** 出勤の時刻と区分を1行で。例）早番 7:30〜16:30（早） */
+export function describeShift(
+  entry: Pick<AttendanceEntry, 'kind' | 'startTime' | 'endTime' | 'code' | 'driver'>,
+): string {
+  const hours = formatHours(entry.startTime, entry.endTime);
+  const kind = entry.driver ? 'ドライバー' : SHIFT_KIND_LABELS[entry.kind];
+  return `${kind}${hours ? ` ${hours}` : ''}（${shiftCodeBase(entry.code) || entry.code}）`;
 }
 
 /** 当日の区分として選べるコード。来ている扱いの区分だけ。 */
@@ -141,7 +145,7 @@ function renderEntry(
     }));
   }
 
-  return el('div', { class: `row roster-row roster-row--${entry.kind}` },
+  return el('div', { class: `row roster-row roster-row--${attendanceGroup(entry)}` },
     el('div', { class: 'row__main' },
       el('span', { class: 'row__title', text: entry.name }),
       el('span', { class: 'row__note', text: describeShift(entry) })),
