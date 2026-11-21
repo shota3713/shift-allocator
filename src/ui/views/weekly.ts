@@ -17,9 +17,6 @@ import { buildWeeklySheets, type AttendanceCell, type WeekRow, type WeekSheet } 
 import { SLOT_LABELS, WEEKDAY_LABELS } from '../../core/types';
 import { PAPER_SIZES, dayNotesFor, setDayNote, updateDatabase, type PaperSize } from '../../store/db';
 
-/** 印刷の余白（mm）。 */
-const PAGE_MARGIN_MM = 8;
-
 /**
  * 「残り全員」の欄に1行で並べる人数の目安。ページに収める計算に使う。
  * A4横の1日の欄は 4〜5字の名前が2つ並ぶ幅。少なめに見積もって、はみ出さない側に倒す。
@@ -90,11 +87,15 @@ export function renderWeekly(root: HTMLElement, ctx: Ctx): void {
 /**
  * 用紙の向きと大きさ。@page は CSS 変数を受けないので、選んだ用紙の
  * 規則をその都度差し込む。
+ *
+ * 余白は 0 にして、白い縁は表の側（weekly.css の .weekly-sheet）で取る。ブラウザは
+ * ページの余白にアプリのアドレス（GitHub のリンク）・題名・日付を刷り込むので、
+ * 余白を無くしてそれが出る場所をなくす。
  */
 function applyPageSize(paper: PaperSize): void {
   const id = 'weekly-page-size';
   const style = document.getElementById(id) ?? document.head.appendChild(el('style', { id }));
-  style.textContent = `@media print { @page { size: ${paper} landscape; margin: ${PAGE_MARGIN_MM}mm; } }`;
+  style.textContent = `@media print { @page { size: ${paper} landscape; margin: 0; } }`;
 }
 
 function savePdf(monthLabel: string): void {

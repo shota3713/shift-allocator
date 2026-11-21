@@ -160,7 +160,11 @@ thead .weekly-table__task { background: var(--surface-sunken); }
 .weekly-note__print { display: none; }
 
 @media print {
-  /* 用紙の大きさと余白は weekly.ts が @page で差し込む（余白 8mm）。 */
+  /*
+   * 用紙の大きさは weekly.ts が @page で差し込む。ページの余白は 0 にして
+   * （ブラウザがそこにアドレスや日付を刷るため）、白い縁 8mm はシートの内側で取る。
+   * --page-h は縁を除いた高さ（A4横 210mm / A3横 297mm から上下 8mm ずつ）。
+   */
   .weekly-sheets--A4 { --page-h: 194mm; --max-font: 10.5pt; }
   .weekly-sheets--A3 { --page-h: 281mm; --max-font: 14pt; }
 
@@ -173,6 +177,7 @@ thead .weekly-table__task { background: var(--surface-sunken); }
     break-after: page;
     break-inside: avoid;
     margin: 0;
+    padding: 8mm;
     color: #000;
   }
   .weekly-sheet:last-of-type { break-after: auto; }
